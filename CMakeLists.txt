@@ -42,11 +42,19 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
 )
 
+# Collect LVGL sources recursively
+file(GLOB_RECURSE LVGL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/LVGL/lvgl/src/*.c
+)
+
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Drivers/LCD/lcd.c
     Drivers/BMP/bmp.c
+    Drivers/LV_PORT_DISP/lv_port_disp.c
+    Drivers/UI/ui_main.c
+    ${LVGL_SOURCES}
 )
 
 # Add include paths
@@ -54,6 +62,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     Drivers/LCD
     Drivers/BMP
+    Middlewares/LVGL/lvgl
+    Middlewares/LVGL
+    Drivers/LV_PORT_DISP
+    Drivers/UI
 )
 
 # Add project symbols (macros)
