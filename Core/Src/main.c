@@ -116,10 +116,11 @@ int main(void) {
   // FormatSdCard();
   // CreateTestFile();
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_2);
-  // LCD_Init();
-  uint16_t lcdId;
-  lcdId = LCD_ReadID();
-  printf("LCD ID = 0x%04X\r\n", lcdId);
+  LCD_Init();
+  LCD_TestFillRed();
+  // uint16_t lcdId;
+  // lcdId = LCD_ReadID();
+  // printf("LCD ID = 0x%04X\r\n", lcdId);
   /* USER CODE END 2 */
 
   /* Infinite loop */

@@ -46,6 +46,9 @@ uint16_t LCD_ReadData(void);
 void LCD_WriteReg(uint16_t reg, uint16_t data);
 
 uint16_t LCD_ReadID(void);
+void LCD_NT35510_InitRegs(void);
+void LCD_Init(void);
+void LCD_TestFillRed(void);
 
 #ifdef __cplusplus
 }
