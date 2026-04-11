@@ -1,18 +1,26 @@
 #include "ui_main.h"
+#include "album.h"
 #include "lvgl.h"
+#include "photo_view.h"
 #include <stdio.h>
 
 static lv_obj_t *mainScreen;
 static lv_obj_t *thumbScreen;
 
+static lv_obj_t *mainScreen;
+static lv_obj_t *thumbScreen;
+static lv_obj_t *photoImg;
+
 static void PrevBtnEvent(lv_event_t *e) {
   (void)e;
   printf("Prev pressed\r\n");
+  Album_ShowPrev();
 }
 
 static void NextBtnEvent(lv_event_t *e) {
   (void)e;
   printf("Next pressed\r\n");
+  Album_ShowNext();
 }
 
 static void ThumbBtnEvent(lv_event_t *e) {
@@ -54,10 +62,12 @@ static void CreateMainScreen(void) {
   lv_obj_set_style_border_width(photoPanel, 2, 0);
   lv_obj_set_style_radius(photoPanel, 8, 0);
 
-  lv_obj_t *photoText = lv_label_create(photoPanel);
-  lv_label_set_text(photoText, "Photo Area");
-  lv_obj_set_style_text_color(photoText, lv_color_hex(0xAAAAAA), 0);
-  lv_obj_center(photoText);
+  // lv_obj_t *photoText = lv_label_create(photoPanel);
+  // lv_label_set_text(photoText, "Photo Area");
+  // lv_obj_set_style_text_color(photoText, lv_color_hex(0xAAAAAA), 0);
+  // lv_obj_center(photoText);
+  photoImg = lv_image_create(photoPanel);
+  lv_obj_center(photoImg);
 
   /* Prev button */
   lv_obj_t *prevBtn = lv_button_create(mainScreen);
@@ -142,5 +152,6 @@ static void CreateThumbScreen(void) {
 void ui_main_init(void) {
   CreateMainScreen();
   CreateThumbScreen();
+  PhotoView_BindImageObject(photoImg);
   lv_screen_load(mainScreen);
 }

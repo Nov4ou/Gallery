@@ -22,14 +22,20 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "album.h"
 #include "bmp.h"
 #include "gt911.h"
+#include "image_scale.h"
+#include "jpeg_viewer.h"
 #include "lcd.h"
 #include "lv_port_disp.h"
+#include "lv_port_indev.h"
 #include "lvgl.h"
+#include "photo_view.h"
 #include "stdint.h"
 #include "ui_main.h"
 #include <stdio.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,8 +45,16 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define SRAM_BASE_ADDR ((uint32_t)0x68000000)
-#define SRAM16 ((volatile uint16_t *)SRAM_BASE_ADDR)
+// #define EXT_SRAM_BASE ((uint32_t)0x68000000U)
+
+// #define JPG_DECODE_MAX_W 800U
+// #define JPG_DECODE_MAX_H 600U
+// #define JPG_DECODE_BUF_SIZE (JPG_DECODE_MAX_W * JPG_DECODE_MAX_H * 2U)
+
+// #define PHOTO_DISPLAY_BUF_SIZE (PHOTO_AREA_W * PHOTO_AREA_H * 2U)
+
+// #define JPG_DECODE_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x000000U))
+// #define PHOTO_DISPLAY_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x00100000U))
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -62,6 +76,11 @@ SRAM_HandleTypeDef hsram2;
 FATFS gFatFs;
 GT911_State_t tpState;
 uint8_t lastPressed = 0;
+
+volatile uint32_t gLvTickCounter = 0;
+
+uint16_t *jpgBuf = JPG_DECODE_BUF;
+uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -76,33 +95,21 @@ static void FormatSdCard(void);
 static void CreateTestFile(void);
 /* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
+/* Private user code
+   ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 int __io_putchar(int ch) {
   uint8_t c = (uint8_t)ch;
   HAL_UART_Transmit(&huart1, &c, 1, HAL_MAX_DELAY);
   return ch;
 }
-
-void HAL_SYSTICK_Callback(void) { lv_tick_inc(1); }
-
-void SramTest(void) {
-  SRAM16[0] = 0x1234;
-  SRAM16[1] = 0x5678;
-  SRAM16[2] = 0xA5A5;
-
-  printf("SRAM16[0] = 0x%04X\r\n", SRAM16[0]);
-  printf("SRAM16[1] = 0x%04X\r\n", SRAM16[1]);
-  printf("SRAM16[2] = 0x%04X\r\n", SRAM16[2]);
-}
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
 
   /* USER CODE BEGIN 1 */
   FRESULT res;
@@ -112,7 +119,8 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick.
+   */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -141,14 +149,15 @@ int main(void)
   lcdId = LCD_ReadID();
   LCD_Init();
   LCD_Clear(LCD_COLOR_BLACK);
-  // res = f_mount(&gFatFs, "", 1);
-  // if (res == FR_OK) {
-  //   bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
-  //   (void)bmpRet;
-  // }
+  res = f_mount(&gFatFs, "", 1);
+  if (res == FR_OK) {
+    bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
+    (void)bmpRet;
+  }
   GT911_Init();
   lv_init();
   lv_port_disp_init();
+  lv_port_indev_init();
   ui_main_init();
 
   uint16_t xMax, yMax;
@@ -169,8 +178,29 @@ int main(void)
     printf("Read one-byte test failed\r\n");
   }
 
-  SramTest();
+  uint16_t *sram = (uint16_t *)0x68000000U;
+  sram[0] = 0x1234;
+  sram[1] = 0xABCD;
+  sram[2] = 0x55AA;
+  printf("SRAM: %04X %04X %04X\r\n", sram[0], sram[1], sram[2]);
 
+  // uint16_t jpgW, jpgH;
+  // int ret;
+  // uint16_t *jpgBuf = JPG_DECODE_BUF;
+  // uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
+
+  // ret = JpegDecodeToBuffer("0:/photo2.jpg", jpgBuf, &jpgW, &jpgH);
+  // printf("JpegDecodeToBuffer ret=%d, w=%u, h=%u\r\n", ret, jpgW, jpgH);
+
+  // if (ret == 0) {
+  //   ScaleRGB565Contain(jpgBuf, jpgW, jpgH, photoBuf, PHOTO_AREA_W,
+  //   PHOTO_AREA_H,
+  //                      0x0000);
+  //   PhotoView_ShowRGB565(photoBuf, PHOTO_AREA_W, PHOTO_AREA_H);
+  // }
+
+  Album_Init();
+  uint32_t lastPrint = HAL_GetTick();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -179,42 +209,46 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (GT911_ReadState(&tpState)) {
-      printf("x=%u y=%u\r\n", tpState.x, tpState.y);
+    // if (GT911_ReadState(&tpState)) {
+    //   printf("x=%u y=%u\r\n", tpState.x, tpState.y);
 
-      if ((lastPressed == 0) && (tpState.pressed == 1)) {
-        LCD_DrawCircle(tpState.x, tpState.y, 10, LCD_COLOR_RED);
-      }
+    //   if ((lastPressed == 0) && (tpState.pressed == 1)) {
+    //     LCD_DrawCircle(tpState.x, tpState.y, 10, LCD_COLOR_RED);
+    //   }
 
-      lastPressed = 1;
-    } else {
-      lastPressed = 0;
-    }
+    //   lastPressed = 1;
+    // } else {
+    //   lastPressed = 0;
+    // }
 
-    // HAL_Delay(20);
     lv_timer_handler();
+
+    // if ((HAL_GetTick() - lastPrint) >= 1000U) {
+    //   lastPrint = HAL_GetTick();
+    //   printf("main alive, lvTick=%lu\r\n", gLvTickCounter);
+    // }
+
     HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+   * in the RCC_OscInitTypeDef structure.
+   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -223,33 +257,30 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
-  * @brief SDIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SDIO_SD_Init(void)
-{
+ * @brief SDIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SDIO_SD_Init(void) {
 
   /* USER CODE BEGIN SDIO_Init 0 */
 
@@ -268,16 +299,14 @@ static void MX_SDIO_SD_Init(void)
   /* USER CODE BEGIN SDIO_Init 2 */
 
   /* USER CODE END SDIO_Init 2 */
-
 }
 
 /**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
+ * @brief TIM12 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM12_Init(void) {
 
   /* USER CODE BEGIN TIM12_Init 0 */
 
@@ -295,41 +324,35 @@ static void MX_TIM12_Init(void)
   htim12.Init.Period = 99;
   htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim12) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 100;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM12_Init 2 */
 
   /* USER CODE END TIM12_Init 2 */
   HAL_TIM_MspPostInit(&htim12);
-
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
+ * @brief USART1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART1_UART_Init(void) {
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -346,23 +369,20 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
@@ -382,10 +402,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GT911_RST_GPIO_Port, GT911_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, LED0_Pin|GT911_SDA_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOF, LED0_Pin | GT911_SDA_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GT911_SCL_Pin|GT911_INT_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GT911_SCL_Pin | GT911_INT_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : GT911_RST_Pin */
   GPIO_InitStruct.Pin = GT911_RST_Pin;
@@ -428,8 +448,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* FSMC initialization function */
-static void MX_FSMC_Init(void)
-{
+static void MX_FSMC_Init(void) {
 
   /* USER CODE BEGIN FSMC_Init 0 */
 
@@ -443,7 +462,7 @@ static void MX_FSMC_Init(void)
   /* USER CODE END FSMC_Init 1 */
 
   /** Perform the SRAM1 memory initialization sequence
-  */
+   */
   hsram1.Instance = FSMC_NORSRAM_DEVICE;
   hsram1.Extended = FSMC_NORSRAM_EXTENDED_DEVICE;
   /* hsram1.Init */
@@ -478,13 +497,12 @@ static void MX_FSMC_Init(void)
   ExtTiming.DataLatency = 17;
   ExtTiming.AccessMode = FSMC_ACCESS_MODE_A;
 
-  if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK)
-  {
-    Error_Handler( );
+  if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK) {
+    Error_Handler();
   }
 
   /** Perform the SRAM2 memory initialization sequence
-  */
+   */
   hsram2.Instance = FSMC_NORSRAM_DEVICE;
   hsram2.Extended = FSMC_NORSRAM_EXTENDED_DEVICE;
   /* hsram2.Init */
@@ -512,9 +530,8 @@ static void MX_FSMC_Init(void)
   Timing.AccessMode = FSMC_ACCESS_MODE_A;
   /* ExtTiming */
 
-  if (HAL_SRAM_Init(&hsram2, &Timing, NULL) != HAL_OK)
-  {
-    Error_Handler( );
+  if (HAL_SRAM_Init(&hsram2, &Timing, NULL) != HAL_OK) {
+    Error_Handler();
   }
 
   /* USER CODE BEGIN FSMC_Init 2 */
@@ -605,11 +622,10 @@ static void CreateTestFile(void) {
 /* USER CODE END 4 */
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
@@ -619,14 +635,13 @@ void Error_Handler(void)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line
      number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,

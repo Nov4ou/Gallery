@@ -55,8 +55,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/SOFT_I2C/soft_i2c.c
     Drivers/TOUCH/gt911.c
     Drivers/LV_PORT_DISP/lv_port_disp.c
+    Drivers/LV_PORT_INDEV/lv_port_indev.c
     Drivers/UI/ui_main.c
+    Drivers/UI/photo_view.c
     ${LVGL_SOURCES}
+    Drivers/JPEG/jpeg_viewer.c
+    Middlewares/TJpgDec/tjpgd.c
+    Drivers/IMAGE/image_scale.c
+    Drivers/APP/album/album.c
 )
 
 # Add include paths
@@ -69,7 +75,12 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/LVGL/lvgl
     Middlewares/LVGL
     Drivers/LV_PORT_DISP
+    Drivers/LV_PORT_INDEV
     Drivers/UI
+    Drivers/JPEG
+    Middlewares/TJpgDec
+    Drivers/IMAGE
+    Drivers/APP/album
 )
 
 # Add project symbols (macros)
