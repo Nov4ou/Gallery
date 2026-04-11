@@ -86,11 +86,10 @@ void HAL_SYSTICK_Callback(void) { lv_tick_inc(1); }
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
-int main(void)
-{
+ * @brief  The application entry point.
+ * @retval int
+ */
+int main(void) {
 
   /* USER CODE BEGIN 1 */
   FRESULT res;
@@ -100,7 +99,8 @@ int main(void)
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick.
+   */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -128,16 +128,18 @@ int main(void)
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_2);
   lcdId = LCD_ReadID();
   LCD_Init();
-  LCD_Clear(LCD_COLOR_WHITE);
-  LCD_DrawCircle(240, 400, 30, LCD_COLOR_RED);
+  LCD_Clear(LCD_COLOR_BLACK);
   // res = f_mount(&gFatFs, "", 1);
   // if (res == FR_OK) {
   //   bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
   //   (void)bmpRet;
   // }
   GT911_Init();
-  uint16_t xMax, yMax;
+  lv_init();
+  lv_port_disp_init();
+  ui_main_init();
 
+  uint16_t xMax, yMax;
   if (GT911_ReadResolution(&xMax, &yMax) == 0) {
     printf("GT911 resolution: xMax=%u yMax=%u\r\n", xMax, yMax);
   } else {
@@ -183,22 +185,21 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
-void SystemClock_Config(void)
-{
+ * @brief System Clock Configuration
+ * @retval None
+ */
+void SystemClock_Config(void) {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+   * in the RCC_OscInitTypeDef structure.
+   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -207,33 +208,30 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 7;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-  {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK) {
     Error_Handler();
   }
 }
 
 /**
-  * @brief SDIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SDIO_SD_Init(void)
-{
+ * @brief SDIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_SDIO_SD_Init(void) {
 
   /* USER CODE BEGIN SDIO_Init 0 */
 
@@ -252,16 +250,14 @@ static void MX_SDIO_SD_Init(void)
   /* USER CODE BEGIN SDIO_Init 2 */
 
   /* USER CODE END SDIO_Init 2 */
-
 }
 
 /**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
+ * @brief TIM12 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM12_Init(void) {
 
   /* USER CODE BEGIN TIM12_Init 0 */
 
@@ -279,41 +275,35 @@ static void MX_TIM12_Init(void)
   htim12.Init.Period = 99;
   htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
-  {
+  if (HAL_TIM_Base_Init(&htim12) != HAL_OK) {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
-  {
+  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK) {
     Error_Handler();
   }
-  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK) {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 100;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
+  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM12_Init 2 */
 
   /* USER CODE END TIM12_Init 2 */
   HAL_TIM_MspPostInit(&htim12);
-
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
+ * @brief USART1 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART1_UART_Init(void) {
 
   /* USER CODE BEGIN USART1_Init 0 */
 
@@ -330,23 +320,20 @@ static void MX_USART1_UART_Init(void)
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
+  if (HAL_UART_Init(&huart1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_GPIO_Init(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
@@ -412,8 +399,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* FSMC initialization function */
-static void MX_FSMC_Init(void)
-{
+static void MX_FSMC_Init(void) {
 
   /* USER CODE BEGIN FSMC_Init 0 */
 
@@ -427,7 +413,7 @@ static void MX_FSMC_Init(void)
   /* USER CODE END FSMC_Init 1 */
 
   /** Perform the SRAM1 memory initialization sequence
-  */
+   */
   hsram1.Instance = FSMC_NORSRAM_DEVICE;
   hsram1.Extended = FSMC_NORSRAM_EXTENDED_DEVICE;
   /* hsram1.Init */
@@ -462,9 +448,8 @@ static void MX_FSMC_Init(void)
   ExtTiming.DataLatency = 17;
   ExtTiming.AccessMode = FSMC_ACCESS_MODE_A;
 
-  if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK)
-  {
-    Error_Handler( );
+  if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK) {
+    Error_Handler();
   }
 
   /* USER CODE BEGIN FSMC_Init 2 */
@@ -555,11 +540,10 @@ static void CreateTestFile(void) {
 /* USER CODE END 4 */
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
-void Error_Handler(void)
-{
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
+void Error_Handler(void) {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
@@ -569,14 +553,13 @@ void Error_Handler(void)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
-void assert_failed(uint8_t *file, uint32_t line)
-{
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
+void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line
      number, ex: printf("Wrong parameters value: file %s on line %d\r\n", file,
