@@ -25,7 +25,7 @@
 #include "lcd.h"
 #include "stdint.h"
 #include <stdio.h>
-
+#include "bmp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,7 +53,7 @@ UART_HandleTypeDef huart1;
 SRAM_HandleTypeDef hsram1;
 
 /* USER CODE BEGIN PV */
-
+FATFS gFatFs;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -84,7 +84,9 @@ int __io_putchar(int ch) {
 int main(void) {
 
   /* USER CODE BEGIN 1 */
-
+  FRESULT res;
+  uint16_t lcdId;
+  int bmpRet;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -116,11 +118,14 @@ int main(void) {
   // FormatSdCard();
   // CreateTestFile();
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_2);
+  lcdId = LCD_ReadID();
   LCD_Init();
-  LCD_TestFillRed();
-  // uint16_t lcdId;
-  // lcdId = LCD_ReadID();
-  // printf("LCD ID = 0x%04X\r\n", lcdId);
+  res = f_mount(&gFatFs, "", 1);
+  if (res == FR_OK) {
+    bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
+    (void)bmpRet;
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */

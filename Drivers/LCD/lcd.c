@@ -514,7 +514,8 @@ void LCD_NT35510_InitRegs(void) {
   LCD_WriteReg(0xFF03, 0x0001);
 
   /* Timing control 4H w/ 4-delay */
-  LCD_WriteReg(0x3600, 0x0040);
+  // LCD_WriteReg(0x3600, 0x0040);
+  LCD_WriteReg(0x3600, 0x0000);
   LCD_WriteReg(0x3500, 0x0000);
 
   /* RGB565 */
@@ -545,6 +546,55 @@ void LCD_Init(void) {
   }
 
   LCD_BacklightOn();
+}
+
+void LCD_SetWindow(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2) {
+  /* Column address */
+  LCD_WriteReg(0x2A00, (uint16_t)((x1 >> 8) & 0x00FFU));
+  LCD_WriteReg(0x2A01, (uint16_t)(x1 & 0x00FFU));
+  LCD_WriteReg(0x2A02, (uint16_t)((x2 >> 8) & 0x00FFU));
+  LCD_WriteReg(0x2A03, (uint16_t)(x2 & 0x00FFU));
+
+  /* Row address */
+  LCD_WriteReg(0x2B00, (uint16_t)((y1 >> 8) & 0x00FFU));
+  LCD_WriteReg(0x2B01, (uint16_t)(y1 & 0x00FFU));
+  LCD_WriteReg(0x2B02, (uint16_t)((y2 >> 8) & 0x00FFU));
+  LCD_WriteReg(0x2B03, (uint16_t)(y2 & 0x00FFU));
+
+  /* Memory write */
+  LCD_WriteRegNo(0x2C00);
+}
+
+void LCD_WriteColor(uint16_t color) { LCD_WriteData(color); }
+
+void LCD_FillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2,
+                  uint16_t color) {
+  uint32_t total;
+  uint32_t i;
+
+  if (x1 > x2 || y1 > y2) {
+    return;
+  }
+
+  if (x2 >= LCD_WIDTH) {
+    x2 = LCD_WIDTH - 1U;
+  }
+
+  if (y2 >= LCD_HEIGHT) {
+    y2 = LCD_HEIGHT - 1U;
+  }
+
+  total = (uint32_t)(x2 - x1 + 1U) * (uint32_t)(y2 - y1 + 1U);
+
+  LCD_SetWindow(x1, y1, x2, y2);
+
+  for (i = 0; i < total; i++) {
+    LCD_WriteData(color);
+  }
+}
+
+void LCD_Clear(uint16_t color) {
+  LCD_FillRect(0, 0, LCD_WIDTH - 1U, LCD_HEIGHT - 1U, color);
 }
 
 void LCD_TestFillRed(void) {
