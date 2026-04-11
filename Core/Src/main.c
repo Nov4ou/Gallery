@@ -22,10 +22,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "bmp.h"
+#include "gt911.h"
 #include "lcd.h"
 #include "stdint.h"
 #include <stdio.h>
-#include "bmp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,6 +55,8 @@ SRAM_HandleTypeDef hsram1;
 
 /* USER CODE BEGIN PV */
 FATFS gFatFs;
+GT911_State_t tpState;
+uint8_t lastPressed = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -120,10 +123,31 @@ int main(void) {
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_2);
   lcdId = LCD_ReadID();
   LCD_Init();
-  res = f_mount(&gFatFs, "", 1);
-  if (res == FR_OK) {
-    bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
-    (void)bmpRet;
+  LCD_Clear(LCD_COLOR_WHITE);
+  LCD_DrawCircle(240, 400, 30, LCD_COLOR_RED);
+  // res = f_mount(&gFatFs, "", 1);
+  // if (res == FR_OK) {
+  //   bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
+  //   (void)bmpRet;
+  // }
+  GT911_Init();
+  uint16_t xMax, yMax;
+
+  if (GT911_ReadResolution(&xMax, &yMax) == 0) {
+    printf("GT911 resolution: xMax=%u yMax=%u\r\n", xMax, yMax);
+  } else {
+    printf("Read GT911 resolution failed\r\n");
+  }
+
+  uint8_t b0, b1, b2, b3;
+
+  if (GT911_ReadOneByte(0x8048, &b0) == 0 &&
+      GT911_ReadOneByte(0x8049, &b1) == 0 &&
+      GT911_ReadOneByte(0x804A, &b2) == 0 &&
+      GT911_ReadOneByte(0x804B, &b3) == 0) {
+    printf("8048=%02X 8049=%02X 804A=%02X 804B=%02X\r\n", b0, b1, b2, b3);
+  } else {
+    printf("Read one-byte test failed\r\n");
   }
 
   /* USER CODE END 2 */
@@ -134,9 +158,19 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
+    if (GT911_ReadState(&tpState)) {
+      printf("x=%u y=%u\r\n", tpState.x, tpState.y);
 
-    HAL_Delay(1000);
+      if ((lastPressed == 0) && (tpState.pressed == 1)) {
+        LCD_DrawCircle(tpState.x, tpState.y, 10, LCD_COLOR_RED);
+      }
+
+      lastPressed = 1;
+    } else {
+      lastPressed = 0;
+    }
+
+    // HAL_Delay(20);
   }
   /* USER CODE END 3 */
 }
@@ -297,17 +331,30 @@ static void MX_GPIO_Init(void) {
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GT911_RST_GPIO_Port, GT911_RST_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOF, LED0_Pin | GT911_SDA_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GT911_SCL_Pin | GT911_INT_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : GT911_RST_Pin */
+  GPIO_InitStruct.Pin = GT911_RST_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GT911_RST_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : LED0_Pin */
   GPIO_InitStruct.Pin = LED0_Pin;
@@ -315,6 +362,27 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED0_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GT911_SCL_Pin */
+  GPIO_InitStruct.Pin = GT911_SCL_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GT911_SCL_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GT911_INT_Pin */
+  GPIO_InitStruct.Pin = GT911_INT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GT911_INT_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GT911_SDA_Pin */
+  GPIO_InitStruct.Pin = GT911_SDA_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GT911_SDA_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -356,19 +424,19 @@ static void MX_FSMC_Init(void) {
   hsram1.Init.PageSize = FSMC_PAGE_SIZE_NONE;
   /* Timing */
   Timing.AddressSetupTime = 15;
-  Timing.AddressHoldTime = 0;
+  Timing.AddressHoldTime = 15;
   Timing.DataSetupTime = 60;
-  // Timing.BusTurnAroundDuration = 0;
-  // Timing.CLKDivision = 16;
-  // Timing.DataLatency = 17;
+  Timing.BusTurnAroundDuration = 0;
+  Timing.CLKDivision = 16;
+  Timing.DataLatency = 17;
   Timing.AccessMode = FSMC_ACCESS_MODE_A;
   /* ExtTiming */
   ExtTiming.AddressSetupTime = 9;
-  ExtTiming.AddressHoldTime = 0;
+  ExtTiming.AddressHoldTime = 15;
   ExtTiming.DataSetupTime = 9;
-  // ExtTiming.BusTurnAroundDuration = 0;
-  // ExtTiming.CLKDivision = 16;
-  // ExtTiming.DataLatency = 17;
+  ExtTiming.BusTurnAroundDuration = 0;
+  ExtTiming.CLKDivision = 16;
+  ExtTiming.DataLatency = 17;
   ExtTiming.AccessMode = FSMC_ACCESS_MODE_A;
 
   if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK) {

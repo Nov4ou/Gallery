@@ -47,6 +47,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Drivers/LCD/lcd.c
     Drivers/BMP/bmp.c
+    Drivers/SOFT_I2C/soft_i2c.c
+    Drivers/TOUCH/gt911.c
 )
 
 # Add include paths
@@ -54,6 +56,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     Drivers/LCD
     Drivers/BMP
+    Drivers/SOFT_I2C
+    Drivers/TOUCH
 )
 
 # Add project symbols (macros)

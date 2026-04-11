@@ -59,8 +59,16 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define GT911_RST_Pin GPIO_PIN_13
+#define GT911_RST_GPIO_Port GPIOC
 #define LED0_Pin GPIO_PIN_9
 #define LED0_GPIO_Port GPIOF
+#define GT911_SCL_Pin GPIO_PIN_0
+#define GT911_SCL_GPIO_Port GPIOB
+#define GT911_INT_Pin GPIO_PIN_1
+#define GT911_INT_GPIO_Port GPIOB
+#define GT911_SDA_Pin GPIO_PIN_11
+#define GT911_SDA_GPIO_Port GPIOF
 
 /* USER CODE BEGIN Private defines */
 

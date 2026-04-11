@@ -617,3 +617,39 @@ void LCD_TestFillRed(void) {
     LCD_WriteData(0xF800);
   }
 }
+
+void LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color) {
+  if (x >= LCD_WIDTH || y >= LCD_HEIGHT) {
+    return;
+  }
+
+  LCD_SetWindow(x, y, x, y);
+  LCD_WriteColor(color);
+}
+
+void LCD_DrawCircle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color) {
+  int x = 0;
+  int y = r;
+  int d = 3 - 2 * r;
+
+  while (x <= y) {
+    LCD_DrawPoint(x0 + x, y0 + y, color);
+    LCD_DrawPoint(x0 - x, y0 + y, color);
+    LCD_DrawPoint(x0 + x, y0 - y, color);
+    LCD_DrawPoint(x0 - x, y0 - y, color);
+
+    LCD_DrawPoint(x0 + y, y0 + x, color);
+    LCD_DrawPoint(x0 - y, y0 + x, color);
+    LCD_DrawPoint(x0 + y, y0 - x, color);
+    LCD_DrawPoint(x0 - y, y0 - x, color);
+
+    if (d < 0) {
+      d = d + 4 * x + 6;
+    } else {
+      d = d + 4 * (x - y) + 10;
+      y--;
+    }
+
+    x++;
+  }
+}

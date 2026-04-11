@@ -63,6 +63,9 @@ void LCD_FillRect(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2,
                   uint16_t color);
 void LCD_Clear(uint16_t color);
 
+void LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
+void LCD_DrawCircle(uint16_t x0, uint16_t y0, uint16_t r, uint16_t color);
+
 #ifdef __cplusplus
 }
 #endif
