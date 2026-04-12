@@ -14,9 +14,28 @@
 #define JPG_DECODE_MAX_H 384U
 #define JPG_DECODE_BUF_SIZE_BYTES (JPG_DECODE_MAX_W * JPG_DECODE_MAX_H * 2U)
 
+#define THUMB_W 120U
+#define THUMB_H 160U
+#define THUMB_PER_PAGE 4U
+#define THUMB_BUF_SIZE_BYTES (THUMB_W * THUMB_H * 2U)
+
+#define THUMB_BUF0                                                             \
+  ((uint16_t *)((uint8_t *)PHOTO_DISPLAY_BUF + 0 * THUMB_BUF_SIZE_BYTES))
+#define THUMB_BUF1                                                             \
+  ((uint16_t *)((uint8_t *)PHOTO_DISPLAY_BUF + 1 * THUMB_BUF_SIZE_BYTES))
+#define THUMB_BUF2                                                             \
+  ((uint16_t *)((uint8_t *)PHOTO_DISPLAY_BUF + 2 * THUMB_BUF_SIZE_BYTES))
+#define THUMB_BUF3                                                             \
+  ((uint16_t *)((uint8_t *)PHOTO_DISPLAY_BUF + 3 * THUMB_BUF_SIZE_BYTES))
+
 void Album_Init(void);
 int Album_ShowByIndex(uint32_t index);
 void Album_ShowNext(void);
 void Album_ShowPrev(void);
+
+/* Thumb support */
+uint32_t Album_GetCount(void);
+int Album_LoadThumbPage(uint32_t pageStartIndex);
+int Album_OpenFromThumb(uint32_t index);
 
 #endif

@@ -2,6 +2,7 @@
 #include "album.h"
 #include "lvgl.h"
 #include "photo_view.h"
+#include "thumb_view.h"
 #include <stdio.h>
 
 static lv_obj_t *mainScreen;
@@ -10,6 +11,11 @@ static lv_obj_t *thumbScreen;
 static lv_obj_t *mainScreen;
 static lv_obj_t *thumbScreen;
 static lv_obj_t *photoImg;
+
+static lv_obj_t *thumbImgs[4];
+static uint32_t gThumbPageStart = 0;
+
+extern uint32_t gCurrentPhotoIndex;
 
 static void PrevBtnEvent(lv_event_t *e) {
   (void)e;
@@ -23,13 +29,71 @@ static void NextBtnEvent(lv_event_t *e) {
   Album_ShowNext();
 }
 
+static void ReloadThumbPage(void) {
+  uint32_t count = Album_GetCount();
+
+  Album_LoadThumbPage(gThumbPageStart);
+
+  if (gThumbPageStart + 0U < count)
+    ThumbView_SetThumb(0, THUMB_BUF0, THUMB_W, THUMB_H, gThumbPageStart + 0U);
+  if (gThumbPageStart + 1U < count)
+    ThumbView_SetThumb(1, THUMB_BUF1, THUMB_W, THUMB_H, gThumbPageStart + 1U);
+  if (gThumbPageStart + 2U < count)
+    ThumbView_SetThumb(2, THUMB_BUF2, THUMB_W, THUMB_H, gThumbPageStart + 2U);
+  if (gThumbPageStart + 3U < count)
+    ThumbView_SetThumb(3, THUMB_BUF3, THUMB_W, THUMB_H, gThumbPageStart + 3U);
+}
+
 static void ThumbBtnEvent(lv_event_t *e) {
   (void)e;
+  gThumbPageStart = 0;
+  ReloadThumbPage();
   lv_screen_load(thumbScreen);
+}
+
+static void Thumb0Event(lv_event_t *e) {
+  uint32_t index;
+  (void)e;
+
+  if (ThumbView_GetPhotoIndex(0, &index) == 0) {
+    Album_OpenFromThumb(index);
+    lv_screen_load(mainScreen);
+  }
+}
+
+static void Thumb1Event(lv_event_t *e) {
+  uint32_t index;
+  (void)e;
+
+  if (ThumbView_GetPhotoIndex(1, &index) == 0) {
+    Album_OpenFromThumb(index);
+    lv_screen_load(mainScreen);
+  }
+}
+
+static void Thumb2Event(lv_event_t *e) {
+  uint32_t index;
+  (void)e;
+
+  if (ThumbView_GetPhotoIndex(2, &index) == 0) {
+    Album_OpenFromThumb(index);
+    lv_screen_load(mainScreen);
+  }
+}
+
+static void Thumb3Event(lv_event_t *e) {
+  uint32_t index;
+  (void)e;
+
+  if (ThumbView_GetPhotoIndex(3, &index) == 0) {
+    Album_OpenFromThumb(index);
+    lv_screen_load(mainScreen);
+  }
 }
 
 static void BackBtnEvent(lv_event_t *e) {
   (void)e;
+  Album_ShowByIndex(gCurrentPhotoIndex);
   lv_screen_load(mainScreen);
 }
 
@@ -131,21 +195,31 @@ static void CreateThumbScreen(void) {
 
   /* Thumbnail placeholders */
   for (int i = 0; i < 4; i++) {
-    lv_obj_t *thumb = lv_obj_create(thumbScreen);
-    lv_obj_set_size(thumb, 180, 220);
+    lv_obj_t *thumbBox = lv_obj_create(thumbScreen);
+    lv_obj_set_size(thumbBox, 180, 220);
+
     int row = i / 2;
     int col = i % 2;
 
-    lv_obj_set_pos(thumb, 40 + col * 220, 100 + row * 260);
-    lv_obj_set_style_bg_color(thumb, lv_color_hex(0x222222), 0);
-    lv_obj_set_style_border_color(thumb, lv_color_hex(0x666666), 0);
-    lv_obj_set_style_border_width(thumb, 2, 0);
-    lv_obj_set_style_radius(thumb, 8, 0);
+    lv_obj_set_pos(thumbBox, 40 + col * 220, 100 + row * 260);
+    lv_obj_set_style_bg_color(thumbBox, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_border_color(thumbBox, lv_color_hex(0x666666), 0);
+    lv_obj_set_style_border_width(thumbBox, 2, 0);
+    lv_obj_set_style_radius(thumbBox, 8, 0);
 
-    lv_obj_t *label = lv_label_create(thumb);
-    lv_label_set_text_fmt(label, "Thumb %d", i + 1);
-    lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_center(label);
+    thumbImgs[i] = lv_image_create(thumbBox);
+    lv_obj_center(thumbImgs[i]);
+
+    ThumbView_BindImageObject((uint32_t)i, thumbImgs[i]);
+
+    if (i == 0)
+      lv_obj_add_event_cb(thumbBox, Thumb0Event, LV_EVENT_CLICKED, NULL);
+    if (i == 1)
+      lv_obj_add_event_cb(thumbBox, Thumb1Event, LV_EVENT_CLICKED, NULL);
+    if (i == 2)
+      lv_obj_add_event_cb(thumbBox, Thumb2Event, LV_EVENT_CLICKED, NULL);
+    if (i == 3)
+      lv_obj_add_event_cb(thumbBox, Thumb3Event, LV_EVENT_CLICKED, NULL);
   }
 }
 
