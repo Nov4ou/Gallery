@@ -87,7 +87,8 @@ uint16_t *jpgBuf = JPG_DECODE_BUF;
 uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
 
 static Mw8266Handle_t mw8266;
-static uint8_t mw8266RxBuf[512];
+static uint8_t mw8266RxBuf[1024];
+ImageUploadContext_t uploadCtx;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -109,6 +110,59 @@ int __io_putchar(int ch) {
   uint8_t c = (uint8_t)ch;
   HAL_UART_Transmit(&huart1, &c, 1, HAL_MAX_DELAY);
   return ch;
+}
+
+static int ExtractIpdPayload(uint8_t *rxBuf, uint8_t **payload,
+                             uint16_t *payloadLen, uint8_t *linkId) {
+  char *ipd;
+  char *colon;
+  unsigned int id = 0;
+  unsigned int len = 0;
+
+  if (rxBuf == NULL || payload == NULL || payloadLen == NULL ||
+      linkId == NULL) {
+    return -1;
+  }
+
+  ipd = strstr((char *)rxBuf, "+IPD,");
+  if (ipd == NULL) {
+    return -2;
+  }
+
+  if (sscanf(ipd, "+IPD,%u,%u", &id, &len) != 2) {
+    return -3;
+  }
+
+  colon = strchr(ipd, ':');
+  if (colon == NULL) {
+    return -4;
+  }
+
+  *linkId = (uint8_t)id;
+  *payloadLen = (uint16_t)len;
+  *payload = (uint8_t *)(colon + 1);
+
+  return 0;
+}
+
+static int ParseImageHeader(const char *payload, uint32_t *fileSize,
+                            char *fileName, uint16_t fileNameSize) {
+  unsigned long size;
+  char name[64];
+
+  if (payload == NULL || fileSize == NULL || fileName == NULL) {
+    return -1;
+  }
+
+  if (sscanf(payload, "IMG:%lu:%63s", &size, name) != 2) {
+    return -2;
+  }
+
+  *fileSize = (uint32_t)size;
+  strncpy(fileName, name, fileNameSize - 1);
+  fileName[fileNameSize - 1] = '\0';
+
+  return 0;
 }
 /* USER CODE END 0 */
 
@@ -238,7 +292,6 @@ int main(void) {
   Album_Init();
   uint32_t lastPrint = HAL_GetTick();
 
-  ImageUploadContext_t uploadCtx;
   ImageUpload_Init(&uploadCtx);
   /* USER CODE END 2 */
 
@@ -261,19 +314,99 @@ int main(void) {
     // }
     Mw8266_ClearBuffer(&mw8266);
 
+    // if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
+    //   if (Mw8266_BufferContains(&mw8266, "+IPD")) {
+    //     printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
+    //   }
+    //   if (Mw8266_BufferContains(&mw8266, "+IPD,0,")) {
+    //     const char reply[] = "STM32 received\r\n";
+    //     Mw8266_SendDataToClient(&mw8266, 0, (const uint8_t *)reply,
+    //                             sizeof(reply) - 1, 3000);
+    //   }
+    // }
+
+    // if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
+    //   uint8_t linkId;
+    //   uint16_t payloadLen;
+    //   uint8_t *payload;
+
+    //   if (Mw8266_BufferContains(&mw8266, "+IPD"))
+    //     printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
+
+    //   if (Mw8266_ParseIpd(mw8266.rxBuf, strlen((char *)mw8266.rxBuf),
+    //   &linkId,
+    //                       &payloadLen, &payload) == 0) {
+    //     if (uploadCtx.state == UploadIdle) {
+    //       /* First packet should contain header text */
+    //       if (ImageUpload_ParseHeader(&uploadCtx, (char *)payload) == 0) {
+    //         if (ImageUpload_StartFile(&uploadCtx) == 0) {
+    //           const char reply[] = "HEADER OK\r\n";
+    //           Mw8266_SendDataToClient(&mw8266, linkId, (const uint8_t
+    //           *)reply,
+    //                                   sizeof(reply) - 1, 3000);
+    //         }
+    //       }
+    //     } else if (uploadCtx.state == UploadReceivingData) {
+    //       ImageUpload_WriteData(&uploadCtx, payload, payloadLen);
+
+    //       if (ImageUpload_IsComplete(&uploadCtx)) {
+    //         ImageUpload_Close(&uploadCtx);
+
+    //         printf("Image upload complete: %s\r\n", uploadCtx.fileName);
+
+    //         /* TODO: load and show this image */
+    //         /* Album_ShowByPath(uploadCtx.fileName); */
+    //       }
+    //     }
+    //   }
+    // }
+
     if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
-      // if (Mw8266_BufferContains(&mw8266, "+IPD")) {
-      //   printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
-      // }
-      if (Mw8266_BufferContains(&mw8266, "+IPD,0,")) {
-        const char reply[] = "STM32 received\r\n";
-        Mw8266_SendDataToClient(&mw8266, 0, (const uint8_t *)reply,
-                                sizeof(reply) - 1, 3000);
+      uint8_t linkId;
+      uint16_t payloadLen;
+      uint8_t *payload;
+
+      if (Mw8266_BufferContains(&mw8266, "+IPD"))
+        printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
+
+      if (Mw8266_ParseIpd(mw8266.rxBuf, strlen((char *)mw8266.rxBuf), &linkId,
+                          &payloadLen, &payload) == 0) {
+
+        printf("linkId=%u payloadLen=%u\r\n", linkId, payloadLen);
+        printf("payload preview: ");
+        for (uint16_t i = 0; i < payloadLen && i < 64; i++) {
+          printf("%c", payload[i]);
+        }
+        printf("\r\n");
+
+        if (uploadCtx.state == UploadIdle) {
+          if (ImageUpload_ParseHexHeader(&uploadCtx, (char *)payload) == 0) {
+            int startRet = ImageUpload_StartHexFile(&uploadCtx);
+            printf("ImageUpload_StartHexFile ret = %d\r\n", startRet);
+
+            if (startRet == 0) {
+              const char reply[] = "HEX HEADER OK\r\n";
+              Mw8266_SendDataToClient(&mw8266, linkId, (const uint8_t *)reply,
+                                      sizeof(reply) - 1, 3000);
+            }
+          }
+        } else if (uploadCtx.state == UploadReceivingHexData) {
+          int wrRet =
+              ImageUpload_WriteHexStream(&uploadCtx, payload, payloadLen);
+          printf("ImageUpload_WriteHexStream ret = %d, written=%lu/%lu\r\n",
+                 wrRet, (unsigned long)uploadCtx.writtenBinarySize,
+                 (unsigned long)uploadCtx.expectedBinarySize);
+
+          if (ImageUpload_IsComplete(&uploadCtx)) {
+            ImageUpload_Close(&uploadCtx);
+            printf("HEX image upload complete: %s\r\n", uploadCtx.fileName);
+          }
+        }
       }
     }
 
     lv_timer_handler();
-    HAL_Delay(20);
+    HAL_Delay(5);
   }
   /* USER CODE END 3 */
 }

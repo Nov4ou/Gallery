@@ -4,32 +4,32 @@
 #include "ff.h"
 #include <stdint.h>
 
-typedef enum {
-  UploadIdle = 0,
-  UploadReceivingHeader,
-  UploadReceivingData,
-  UploadDone,
-  UploadError
+typedef enum
+{
+    UploadIdle = 0,
+    UploadReceivingHexData,
+    UploadDone,
+    UploadError
 } UploadState_t;
 
-typedef struct {
-  UploadState_t state;
+typedef struct
+{
+    UploadState_t state;
 
-  uint32_t expectedSize;
-  uint32_t receivedSize;
+    uint32_t expectedBinarySize;   /* Final JPG File Size (Bytes) */
+    uint32_t writtenBinarySize;    /* The number of bytes written to the file. */
 
-  char fileName[64];
-  FIL file;
+    char fileName[64];
+    FIL file;
 
-  uint8_t headerBuf[128];
-  uint16_t headerLen;
+    uint8_t halfByteValid;
+    char highNibbleChar;
 } ImageUploadContext_t;
 
 void ImageUpload_Init(ImageUploadContext_t *ctx);
-int ImageUpload_ParseHeader(ImageUploadContext_t *ctx, const char *line);
-int ImageUpload_StartFile(ImageUploadContext_t *ctx);
-int ImageUpload_WriteData(ImageUploadContext_t *ctx, const uint8_t *data,
-                          uint16_t len);
+int ImageUpload_ParseHexHeader(ImageUploadContext_t *ctx, const char *line);
+int ImageUpload_StartHexFile(ImageUploadContext_t *ctx);
+int ImageUpload_WriteHexStream(ImageUploadContext_t *ctx, const uint8_t *data, uint16_t len);
 int ImageUpload_IsComplete(ImageUploadContext_t *ctx);
 void ImageUpload_Close(ImageUploadContext_t *ctx);
 
