@@ -64,6 +64,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/TJpgDec/tjpgd.c
     Drivers/IMAGE/image_scale.c
     Drivers/APP/album/album.c
+    Drivers/APP/upload/image_upload.c
+    Drivers/WIFI/mw8266.c
 )
 
 # Add include paths
@@ -82,6 +84,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/TJpgDec
     Drivers/IMAGE
     Drivers/APP/album
+    Drivers/APP/upload
+    Drivers/WIFI
 )
 
 # Add project symbols (macros)

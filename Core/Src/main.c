@@ -26,13 +26,16 @@
 #include "bmp.h"
 #include "gt911.h"
 #include "image_scale.h"
+#include "image_upload.h"
 #include "jpeg_viewer.h"
 #include "lcd.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
 #include "lvgl.h"
+#include "mw8266.h"
 #include "photo_view.h"
 #include "stdint.h"
+#include "string.h"
 #include "ui_main.h"
 #include <stdio.h>
 
@@ -68,6 +71,7 @@ SD_HandleTypeDef hsd;
 TIM_HandleTypeDef htim12;
 
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart3;
 
 SRAM_HandleTypeDef hsram1;
 SRAM_HandleTypeDef hsram2;
@@ -81,6 +85,9 @@ volatile uint32_t gLvTickCounter = 0;
 
 uint16_t *jpgBuf = JPG_DECODE_BUF;
 uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
+
+static Mw8266Handle_t mw8266;
+static uint8_t mw8266RxBuf[512];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,13 +97,13 @@ static void MX_SDIO_SD_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_FSMC_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void FormatSdCard(void);
 static void CreateTestFile(void);
 /* USER CODE END PFP */
 
-/* Private user code
-   ---------------------------------------------------------*/
+/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 int __io_putchar(int ch) {
   uint8_t c = (uint8_t)ch;
@@ -141,10 +148,12 @@ int main(void) {
   MX_USART1_UART_Init();
   MX_TIM12_Init();
   MX_FSMC_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   // HAL_Delay(1000);
   // FormatSdCard();
   // CreateTestFile();
+
   HAL_TIM_PWM_Start(&htim12, TIM_CHANNEL_2);
   lcdId = LCD_ReadID();
   LCD_Init();
@@ -184,23 +193,53 @@ int main(void) {
   sram[2] = 0x55AA;
   printf("SRAM: %04X %04X %04X\r\n", sram[0], sram[1], sram[2]);
 
-  // uint16_t jpgW, jpgH;
-  // int ret;
-  // uint16_t *jpgBuf = JPG_DECODE_BUF;
-  // uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
+  Mw8266_Init(&mw8266, &huart3, mw8266RxBuf, sizeof(mw8266RxBuf));
 
-  // ret = JpegDecodeToBuffer("0:/photo2.jpg", jpgBuf, &jpgW, &jpgH);
-  // printf("JpegDecodeToBuffer ret=%d, w=%u, h=%u\r\n", ret, jpgW, jpgH);
+  if (Mw8266_TestAT(&mw8266) == mw8266Ok) {
+    printf("MW8266 AT OK\r\n");
+  } else {
+    printf("MW8266 AT FAIL\r\n");
+  }
 
-  // if (ret == 0) {
-  //   ScaleRGB565Contain(jpgBuf, jpgW, jpgH, photoBuf, PHOTO_AREA_W,
-  //   PHOTO_AREA_H,
-  //                      0x0000);
-  //   PhotoView_ShowRGB565(photoBuf, PHOTO_AREA_W, PHOTO_AREA_H);
-  // }
+  Mw8266_SetEcho(&mw8266, 0);
+
+  /* 1. Set AP mode */
+  if (Mw8266_SetWifiMode(&mw8266, 2) == mw8266Ok) {
+    printf("Set AP mode OK\r\n");
+  } else {
+    printf("Set AP mode FAIL\r\n");
+  }
+
+  /* 2. Configure hotspot: SSID / password / channel / encryption */
+  if (Mw8266_ConfigAP(&mw8266, "STM32_AP", "12345678", 1, 3) == mw8266Ok) {
+    printf("Config AP OK\r\n");
+  } else {
+    printf("Config AP FAIL\r\n");
+  }
+
+  /* 3. Enable multi connection */
+  if (Mw8266_SetMux(&mw8266, 1) == mw8266Ok) {
+    printf("Set MUX OK\r\n");
+  } else {
+    printf("Set MUX FAIL\r\n");
+  }
+
+  /* 4. Start TCP server on port 8080 */
+  if (Mw8266_StartServer(&mw8266, 8080) == mw8266Ok) {
+    printf("Start server OK\r\n");
+  } else {
+    printf("Start server FAIL\r\n");
+  }
+
+  /* 5. Query IP */
+  Mw8266_GetIP(&mw8266);
+  printf("IP info:\r\n%s\r\n", mw8266.rxBuf);
 
   Album_Init();
   uint32_t lastPrint = HAL_GetTick();
+
+  ImageUploadContext_t uploadCtx;
+  ImageUpload_Init(&uploadCtx);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -220,15 +259,21 @@ int main(void) {
     // } else {
     //   lastPressed = 0;
     // }
+    Mw8266_ClearBuffer(&mw8266);
+
+    if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
+      // if (Mw8266_BufferContains(&mw8266, "+IPD")) {
+      //   printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
+      // }
+      if (Mw8266_BufferContains(&mw8266, "+IPD,0,")) {
+        const char reply[] = "STM32 received\r\n";
+        Mw8266_SendDataToClient(&mw8266, 0, (const uint8_t *)reply,
+                                sizeof(reply) - 1, 3000);
+      }
+    }
 
     lv_timer_handler();
-
-    // if ((HAL_GetTick() - lastPrint) >= 1000U) {
-    //   lastPrint = HAL_GetTick();
-    //   printf("main alive, lvTick=%lu\r\n", gLvTickCounter);
-    // }
-
-    HAL_Delay(5);
+    HAL_Delay(20);
   }
   /* USER CODE END 3 */
 }
@@ -375,6 +420,36 @@ static void MX_USART1_UART_Init(void) {
   /* USER CODE BEGIN USART1_Init 2 */
 
   /* USER CODE END USART1_Init 2 */
+}
+
+/**
+ * @brief USART3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART3_UART_Init(void) {
+
+  /* USER CODE BEGIN USART3_Init 0 */
+
+  /* USER CODE END USART3_Init 0 */
+
+  /* USER CODE BEGIN USART3_Init 1 */
+
+  /* USER CODE END USART3_Init 1 */
+  huart3.Instance = USART3;
+  huart3.Init.BaudRate = 115200;
+  huart3.Init.WordLength = UART_WORDLENGTH_8B;
+  huart3.Init.StopBits = UART_STOPBITS_1;
+  huart3.Init.Parity = UART_PARITY_NONE;
+  huart3.Init.Mode = UART_MODE_TX_RX;
+  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart3) != HAL_OK) {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART3_Init 2 */
+
+  /* USER CODE END USART3_Init 2 */
 }
 
 /**
