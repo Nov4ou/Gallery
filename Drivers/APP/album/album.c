@@ -9,6 +9,8 @@ static const char *gPhotoList[] = {
     "0:/logo2.jpg",
     "0:/logo3.jpg",
     "0:/logo4.jpg",
+    "0:/logo5.jpg",
+    "0:/logo7.jpg",
     /* "0:/photo3.jpg", */
 };
 
