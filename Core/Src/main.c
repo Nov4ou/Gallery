@@ -390,6 +390,7 @@ int main(void) {
               if (ImageUpload_IsComplete(&uploadCtx)) {
                 ImageUpload_Close(&uploadCtx);
                 Album_ScanPhotos("0:/");
+                Album_OpenUploadedPhoto(uploadCtx.fileName);
                 printf("HEX image upload complete: %s\r\n", uploadCtx.fileName);
 
                 /* 可选：这里可以加 JPG 头尾检查 */

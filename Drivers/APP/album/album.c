@@ -95,6 +95,30 @@ static int Album_MatchesCategory(const char *fileName,
   }
 }
 
+AlbumCategory_t Album_GetCategoryFromFileName(const char *fileName) {
+  if (Album_MatchesCategory(fileName, AlbumCategoryBuilding)) {
+    return AlbumCategoryBuilding;
+  }
+
+  if (Album_MatchesCategory(fileName, AlbumCategoryScenery)) {
+    return AlbumCategoryScenery;
+  }
+
+  if (Album_MatchesCategory(fileName, AlbumCategoryGame)) {
+    return AlbumCategoryGame;
+  }
+
+  if (Album_MatchesCategory(fileName, AlbumCategoryPerson)) {
+    return AlbumCategoryPerson;
+  }
+
+  if (Album_MatchesCategory(fileName, AlbumCategoryAnimal)) {
+    return AlbumCategoryAnimal;
+  }
+
+  return AlbumCategoryAll;
+}
+
 static void Album_RebuildCategoryList(uint32_t preferredPhotoIndex) {
   uint32_t i;
 
@@ -339,3 +363,30 @@ AlbumCategory_t Album_GetCategory(void) { return gCurrentCategory; }
 uint32_t Album_GetCategoryCount(void) { return gCategoryPhotoCount; }
 
 uint32_t Album_GetCount(void) { return gPhotoCount; }
+
+int Album_OpenUploadedPhoto(const char *fileName) {
+  char targetPath[MAX_PHOTO_PATH];
+  AlbumCategory_t category;
+  uint32_t i;
+
+  if (fileName == NULL || fileName[0] == '\0') {
+    return -1;
+  }
+
+  snprintf(targetPath, sizeof(targetPath), "0:/%s", fileName);
+
+  category = Album_GetCategoryFromFileName(fileName);
+  Album_SetCategory(category);
+
+  for (i = 0; i < gPhotoCount; i++) {
+    if (StrCaseCmp(gPhotoList[i], targetPath) == 0) {
+      printf("Album_OpenUploadedPhoto: category=%d index=%lu path=%s\r\n",
+             (int)category, (unsigned long)i, gPhotoList[i]);
+      return Album_ShowByIndex(i);
+    }
+  }
+
+  printf("Album_OpenUploadedPhoto: not found, fileName=%s path=%s\r\n",
+         fileName, targetPath);
+  return -2;
+}

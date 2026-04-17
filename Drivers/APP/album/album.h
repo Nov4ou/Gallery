@@ -41,5 +41,7 @@ uint32_t Album_SetCategory(AlbumCategory_t category);
 AlbumCategory_t Album_GetCategory(void);
 uint32_t Album_GetCategoryCount(void);
 uint32_t Album_GetCount(void);
+AlbumCategory_t Album_GetCategoryFromFileName(const char *fileName);
+int Album_OpenUploadedPhoto(const char *fileName);
 
 #endif

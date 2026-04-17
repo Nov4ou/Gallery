@@ -8,20 +8,24 @@
 
 #define GALLERY_PASSWORD "1234"
 #define PASSWORD_MAX_LEN 4U
+#define AUTOPLAY_INTERVAL_MS 3000U
 
 static lv_obj_t *lockScreen;
 static lv_obj_t *mainScreen;
 static lv_obj_t *categoryScreen;
 static lv_obj_t *searchScreen;
 static lv_obj_t *photoImg;
+static lv_obj_t *autoplayLabel;
 static lv_obj_t *passwordLabel;
 static lv_obj_t *passwordStatusLabel;
 static lv_obj_t *searchInputLabel;
 static lv_obj_t *searchStatusLabel;
 static lv_obj_t *searchResultContainer;
+static lv_timer_t *autoplayTimer;
 static char passwordInput[PASSWORD_MAX_LEN + 1U];
 static uint8_t passwordInputLen = 0;
 static char searchInput = '\0';
+static uint8_t autoplayEnabled = 0;
 
 extern uint32_t gCurrentPhotoIndex;
 
@@ -30,6 +34,8 @@ typedef enum {
   PasswordKeyOk,
   PasswordKeyClear,
 } PasswordKey_t;
+
+static void AutoplayStop(void);
 
 static void PasswordInputReset(void) {
   passwordInputLen = 0;
@@ -49,10 +55,56 @@ static void PasswordInputRefresh(void) {
 }
 
 static void LockGallery(void) {
+  AutoplayStop();
   PasswordInputReset();
   PasswordInputRefresh();
   lv_label_set_text(passwordStatusLabel, "");
   lv_screen_load(lockScreen);
+}
+
+static void AutoplayRefreshLabel(void) {
+  if (autoplayLabel == NULL) {
+    return;
+  }
+
+  if (autoplayEnabled) {
+    lv_label_set_text(autoplayLabel, "Stop");
+  } else {
+    lv_label_set_text(autoplayLabel, "Auto");
+  }
+}
+
+static void AutoplayTimerCb(lv_timer_t *timer) {
+  (void)timer;
+
+  if (!autoplayEnabled) {
+    return;
+  }
+
+  if (lv_screen_active() != mainScreen) {
+    return;
+  }
+
+  Album_ShowNext();
+}
+
+static void AutoplayStart(void) {
+  if (autoplayTimer == NULL) {
+    autoplayTimer = lv_timer_create(AutoplayTimerCb, AUTOPLAY_INTERVAL_MS, NULL);
+  }
+
+  autoplayEnabled = 1U;
+  AutoplayRefreshLabel();
+}
+
+static void AutoplayStop(void) {
+  if (autoplayTimer != NULL) {
+    lv_timer_delete(autoplayTimer);
+    autoplayTimer = NULL;
+  }
+
+  autoplayEnabled = 0U;
+  AutoplayRefreshLabel();
 }
 
 static void PasswordKeyEvent(lv_event_t *e) {
@@ -101,6 +153,16 @@ static void NextBtnEvent(lv_event_t *e) {
   (void)e;
   printf("Next pressed\r\n");
   Album_ShowNext();
+}
+
+static void AutoplayBtnEvent(lv_event_t *e) {
+  (void)e;
+
+  if (autoplayEnabled) {
+    AutoplayStop();
+  } else {
+    AutoplayStart();
+  }
 }
 
 static void CategoryBtnEvent(lv_event_t *e) {
@@ -366,6 +428,16 @@ static void CreateMainScreen(void) {
   lv_obj_t *searchBtn = CreateButton(mainScreen, "Search", 90, 40);
   lv_obj_align(searchBtn, LV_ALIGN_TOP_LEFT, 10, 10);
   lv_obj_add_event_cb(searchBtn, SearchBtnEvent, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *autoplayBtn = lv_button_create(mainScreen);
+  lv_obj_set_size(autoplayBtn, 80, 40);
+  lv_obj_align(autoplayBtn, LV_ALIGN_TOP_LEFT, 110, 10);
+  lv_obj_set_style_radius(autoplayBtn, 8, 0);
+  lv_obj_add_event_cb(autoplayBtn, AutoplayBtnEvent, LV_EVENT_CLICKED, NULL);
+
+  autoplayLabel = lv_label_create(autoplayBtn);
+  lv_label_set_text(autoplayLabel, "Auto");
+  lv_obj_center(autoplayLabel);
 
   lv_obj_t *photoPanel = lv_obj_create(mainScreen);
   lv_obj_set_size(photoPanel, 440, 620);
