@@ -58,6 +58,7 @@
 
 // #define JPG_DECODE_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x000000U))
 // #define PHOTO_DISPLAY_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x00100000U))
+#define MW8266_RX_DMA_BUF_SIZE 2048U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,6 +73,7 @@ TIM_HandleTypeDef htim12;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_usart3_rx;
 
 SRAM_HandleTypeDef hsram1;
 SRAM_HandleTypeDef hsram2;
@@ -86,14 +88,16 @@ volatile uint32_t gLvTickCounter = 0;
 uint16_t *jpgBuf = JPG_DECODE_BUF;
 uint16_t *photoBuf = PHOTO_DISPLAY_BUF;
 
-static Mw8266Handle_t mw8266;
-static uint8_t mw8266RxBuf[1024];
+Mw8266Handle_t mw8266;
+uint8_t mw8266RxDmaBuf[MW8266_RX_DMA_BUF_SIZE];
+
 ImageUploadContext_t uploadCtx;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_SDIO_SD_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM12_Init(void);
@@ -197,6 +201,7 @@ int main(void) {
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_SDIO_SD_Init();
   MX_FATFS_Init();
   MX_USART1_UART_Init();
@@ -214,7 +219,7 @@ int main(void) {
   LCD_Clear(LCD_COLOR_BLACK);
   res = f_mount(&gFatFs, "", 1);
   if (res == FR_OK) {
-    bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
+    // bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
     (void)bmpRet;
   }
   GT911_Init();
@@ -223,31 +228,33 @@ int main(void) {
   lv_port_indev_init();
   ui_main_init();
 
-  uint16_t xMax, yMax;
-  if (GT911_ReadResolution(&xMax, &yMax) == 0) {
-    printf("GT911 resolution: xMax=%u yMax=%u\r\n", xMax, yMax);
-  } else {
-    printf("Read GT911 resolution failed\r\n");
-  }
+  // uint16_t xMax, yMax;
+  // if (GT911_ReadResolution(&xMax, &yMax) == 0) {
+  //   printf("GT911 resolution: xMax=%u yMax=%u\r\n", xMax, yMax);
+  // } else {
+  //   printf("Read GT911 resolution failed\r\n");
+  // }
 
-  uint8_t b0, b1, b2, b3;
+  // uint8_t b0, b1, b2, b3;
 
-  if (GT911_ReadOneByte(0x8048, &b0) == 0 &&
-      GT911_ReadOneByte(0x8049, &b1) == 0 &&
-      GT911_ReadOneByte(0x804A, &b2) == 0 &&
-      GT911_ReadOneByte(0x804B, &b3) == 0) {
-    printf("8048=%02X 8049=%02X 804A=%02X 804B=%02X\r\n", b0, b1, b2, b3);
-  } else {
-    printf("Read one-byte test failed\r\n");
-  }
+  // if (GT911_ReadOneByte(0x8048, &b0) == 0 &&
+  //     GT911_ReadOneByte(0x8049, &b1) == 0 &&
+  //     GT911_ReadOneByte(0x804A, &b2) == 0 &&
+  //     GT911_ReadOneByte(0x804B, &b3) == 0) {
+  //   printf("8048=%02X 8049=%02X 804A=%02X 804B=%02X\r\n", b0, b1, b2, b3);
+  // } else {
+  //   printf("Read one-byte test failed\r\n");
+  // }
 
-  uint16_t *sram = (uint16_t *)0x68000000U;
-  sram[0] = 0x1234;
-  sram[1] = 0xABCD;
-  sram[2] = 0x55AA;
-  printf("SRAM: %04X %04X %04X\r\n", sram[0], sram[1], sram[2]);
+  // uint16_t *sram = (uint16_t *)0x68000000U;
+  // sram[0] = 0x1234;
+  // sram[1] = 0xABCD;
+  // sram[2] = 0x55AA;
+  // printf("SRAM: %04X %04X %04X\r\n", sram[0], sram[1], sram[2]);
 
-  Mw8266_Init(&mw8266, &huart3, mw8266RxBuf, sizeof(mw8266RxBuf));
+  Mw8266_Init(&mw8266, &huart3, mw8266RxDmaBuf, sizeof(mw8266RxDmaBuf));
+  // Mw8266_StartReceive(&mw8266);
+  printf("MW8266 DMA+IDLE started\r\n");
 
   if (Mw8266_TestAT(&mw8266) == mw8266Ok) {
     printf("MW8266 AT OK\r\n");
@@ -287,7 +294,7 @@ int main(void) {
 
   /* 5. Query IP */
   Mw8266_GetIP(&mw8266);
-  printf("IP info:\r\n%s\r\n", mw8266.rxBuf);
+  printf("IP info:\r\n%s\r\n", mw8266.rxDmaBuf);
 
   Album_Init();
   uint32_t lastPrint = HAL_GetTick();
@@ -301,108 +308,102 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // if (GT911_ReadState(&tpState)) {
-    //   printf("x=%u y=%u\r\n", tpState.x, tpState.y);
-
-    //   if ((lastPressed == 0) && (tpState.pressed == 1)) {
-    //     LCD_DrawCircle(tpState.x, tpState.y, 10, LCD_COLOR_RED);
-    //   }
-
-    //   lastPressed = 1;
-    // } else {
-    //   lastPressed = 0;
-    // }
-    Mw8266_ClearBuffer(&mw8266);
-
-    // if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
-    //   if (Mw8266_BufferContains(&mw8266, "+IPD")) {
-    //     printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
-    //   }
-    //   if (Mw8266_BufferContains(&mw8266, "+IPD,0,")) {
-    //     const char reply[] = "STM32 received\r\n";
-    //     Mw8266_SendDataToClient(&mw8266, 0, (const uint8_t *)reply,
-    //                             sizeof(reply) - 1, 3000);
-    //   }
-    // }
-
-    // if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
-    //   uint8_t linkId;
-    //   uint16_t payloadLen;
-    //   uint8_t *payload;
-
-    //   if (Mw8266_BufferContains(&mw8266, "+IPD"))
-    //     printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
-
-    //   if (Mw8266_ParseIpd(mw8266.rxBuf, strlen((char *)mw8266.rxBuf),
-    //   &linkId,
-    //                       &payloadLen, &payload) == 0) {
-    //     if (uploadCtx.state == UploadIdle) {
-    //       /* First packet should contain header text */
-    //       if (ImageUpload_ParseHeader(&uploadCtx, (char *)payload) == 0) {
-    //         if (ImageUpload_StartFile(&uploadCtx) == 0) {
-    //           const char reply[] = "HEADER OK\r\n";
-    //           Mw8266_SendDataToClient(&mw8266, linkId, (const uint8_t
-    //           *)reply,
-    //                                   sizeof(reply) - 1, 3000);
-    //         }
-    //       }
-    //     } else if (uploadCtx.state == UploadReceivingData) {
-    //       ImageUpload_WriteData(&uploadCtx, payload, payloadLen);
-
-    //       if (ImageUpload_IsComplete(&uploadCtx)) {
-    //         ImageUpload_Close(&uploadCtx);
-
-    //         printf("Image upload complete: %s\r\n", uploadCtx.fileName);
-
-    //         /* TODO: load and show this image */
-    //         /* Album_ShowByPath(uploadCtx.fileName); */
-    //       }
-    //     }
-    //   }
-    // }
-
-    if (Mw8266_PollResponse(&mw8266, 200) == mw8266Ok) {
+    if (mw8266.rxFrameReady) {
       uint8_t linkId;
       uint16_t payloadLen;
       uint8_t *payload;
+      int parseRet;
 
-      if (Mw8266_BufferContains(&mw8266, "+IPD"))
-        printf("RX from phone:\r\n%s\r\n", mw8266.rxBuf);
+      mw8266.rxFrameReady = 0;
 
-      if (Mw8266_ParseIpd(mw8266.rxBuf, strlen((char *)mw8266.rxBuf), &linkId,
-                          &payloadLen, &payload) == 0) {
+      printf("MW8266 RX frame len = %u\r\n", mw8266.rxFrameLen);
 
-        printf("linkId=%u payloadLen=%u\r\n", linkId, payloadLen);
-        printf("payload preview: ");
-        for (uint16_t i = 0; i < payloadLen && i < 64; i++) {
-          printf("%c", payload[i]);
-        }
-        printf("\r\n");
+      if (mw8266.rxFrameLen < mw8266.rxDmaBufSize) {
+        mw8266.rxDmaBuf[mw8266.rxFrameLen] = '\0';
+      } else {
+        mw8266.rxDmaBuf[mw8266.rxDmaBufSize - 1U] = '\0';
+      }
 
-        if (uploadCtx.state == UploadIdle) {
-          if (ImageUpload_ParseHexHeader(&uploadCtx, (char *)payload) == 0) {
-            int startRet = ImageUpload_StartHexFile(&uploadCtx);
-            printf("ImageUpload_StartHexFile ret = %d\r\n", startRet);
+      printf("RX frame:\r\n%s\r\n", mw8266.rxDmaBuf);
 
-            if (startRet == 0) {
-              const char reply[] = "HEX HEADER OK\r\n";
-              Mw8266_SendDataToClient(&mw8266, linkId, (const uint8_t *)reply,
-                                      sizeof(reply) - 1, 3000);
+      /* 1. Connection state frames */
+      if (strstr((char *)mw8266.rxDmaBuf, ",CONNECT") != NULL) {
+        printf("Client connected\r\n");
+      } else if (strstr((char *)mw8266.rxDmaBuf, ",CLOSED") != NULL) {
+        printf("Client disconnected\r\n");
+      } else {
+        /* 2. Try parse +IPD frame */
+        parseRet = Mw8266_ParseIpd(mw8266.rxDmaBuf, mw8266.rxFrameLen, &linkId,
+                                   &payloadLen, &payload);
+
+        if (parseRet == 0) {
+          uint16_t actualAvailableLen;
+          int completeRet;
+
+          completeRet =
+              Mw8266_IsIpdComplete(mw8266.rxDmaBuf, mw8266.rxFrameLen, payload,
+                                   payloadLen, &actualAvailableLen);
+
+          printf("payloadLen=%u actualAvailableLen=%u completeRet=%d\r\n",
+                 payloadLen, actualAvailableLen, completeRet);
+
+          if (completeRet == 1) {
+            /* 2.1 Upload header */
+            if (uploadCtx.state == UploadIdle) {
+              if (ImageUpload_ParseHexHeader(&uploadCtx, (char *)payload) ==
+                  0) {
+                int startRet = ImageUpload_StartHexFile(&uploadCtx);
+                printf("ImageUpload_StartHexFile ret = %d\r\n", startRet);
+
+                if (startRet == 0) {
+                  const char reply[] = "HEX HEADER OK\r\n";
+
+                  Mw8266_SendDataToClient(&mw8266, linkId,
+                                          (const uint8_t *)reply,
+                                          sizeof(reply) - 1U, 3000);
+
+                  printf("Ready to receive HEX image data\r\n");
+                }
+              } else {
+                /* Not an upload header, just print payload */
+                printf("Received payload from link %u:\r\n", linkId);
+                for (uint16_t i = 0; i < payloadLen; i++) {
+                  printf("%c", payload[i]);
+                }
+                printf("\r\n");
+              }
             }
-          }
-        } else if (uploadCtx.state == UploadReceivingHexData) {
-          int wrRet =
-              ImageUpload_WriteHexStream(&uploadCtx, payload, payloadLen);
-          printf("ImageUpload_WriteHexStream ret = %d, written=%lu/%lu\r\n",
-                 wrRet, (unsigned long)uploadCtx.writtenBinarySize,
-                 (unsigned long)uploadCtx.expectedBinarySize);
+            /* 2.2 Upload data body */
+            else if (uploadCtx.state == UploadReceivingHexData) {
+              int wrRet;
 
-          if (ImageUpload_IsComplete(&uploadCtx)) {
-            ImageUpload_Close(&uploadCtx);
-            printf("HEX image upload complete: %s\r\n", uploadCtx.fileName);
+              wrRet =
+                  ImageUpload_WriteHexStream(&uploadCtx, payload, payloadLen);
+
+              printf("ImageUpload_WriteHexStream ret = %d, written=%lu/%lu\r\n",
+                     wrRet, (unsigned long)uploadCtx.writtenBinarySize,
+                     (unsigned long)uploadCtx.expectedBinarySize);
+
+              if (ImageUpload_IsComplete(&uploadCtx)) {
+                ImageUpload_Close(&uploadCtx);
+                printf("HEX image upload complete: %s\r\n", uploadCtx.fileName);
+
+                /* 可选：这里可以加 JPG 头尾检查 */
+                /* DebugCheckUploadedJpg(uploadCtx.fileName); */
+              }
+            } else {
+              printf("Unhandled upload state = %d\r\n", uploadCtx.state);
+            }
+          } else {
+            printf("IPD not complete yet\r\n");
           }
+        } else {
+          printf("Unknown frame\r\n");
         }
       }
+
+      /* Restart DMA reception for next frame */
+      Mw8266_StartReceive(&mw8266);
     }
 
     lv_timer_handler();
@@ -583,6 +584,20 @@ static void MX_USART3_UART_Init(void) {
   /* USER CODE BEGIN USART3_Init 2 */
 
   /* USER CODE END USART3_Init 2 */
+}
+
+/**
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void) {
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
 }
 
 /**

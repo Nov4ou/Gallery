@@ -5,12 +5,13 @@
 #include <stdio.h>
 
 static const char *gPhotoList[] = {
-    "0:/logo1.jpg",
-    "0:/logo2.jpg",
-    "0:/logo3.jpg",
-    "0:/logo4.jpg",
-    "0:/logo5.jpg",
-    "0:/logo7.jpg",
+    "0:/LOGO1.JPG",
+    "0:/LOGO2.JPG",
+    "0:/LOGO3.JPG",
+    "0:/LOGO4.JPG",
+    "0:/LOGO5.JPG",
+    "0:/LOGO6.JPG",
+    "0:/LOGO7.JPG",
     /* "0:/photo3.jpg", */
 };
 

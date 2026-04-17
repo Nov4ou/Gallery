@@ -150,8 +150,8 @@ int ImageUpload_WriteHexStream(ImageUploadContext_t *ctx, const uint8_t *data,
       outByte = (uint8_t)((hi << 4) | lo);
 
       if (debugCount < 16) {
-        printf("byte[%lu] = 0x%02X\r\n", (unsigned long)ctx->writtenBinarySize,
-               outByte);
+        // printf("byte[%lu] = 0x%02X\r\n", (unsigned long)ctx->writtenBinarySize,
+        //        outByte);
         debugCount++;
       }
 
