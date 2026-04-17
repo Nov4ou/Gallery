@@ -48,17 +48,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// #define EXT_SRAM_BASE ((uint32_t)0x68000000U)
-
-// #define JPG_DECODE_MAX_W 800U
-// #define JPG_DECODE_MAX_H 600U
-// #define JPG_DECODE_BUF_SIZE (JPG_DECODE_MAX_W * JPG_DECODE_MAX_H * 2U)
-
-// #define PHOTO_DISPLAY_BUF_SIZE (PHOTO_AREA_W * PHOTO_AREA_H * 2U)
-
-// #define JPG_DECODE_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x000000U))
-// #define PHOTO_DISPLAY_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x00100000U))
-#define MW8266_RX_DMA_BUF_SIZE 2048U
+#define MW8266_RX_DMA_BUF_SIZE 4096U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -92,6 +82,8 @@ Mw8266Handle_t mw8266;
 uint8_t mw8266RxDmaBuf[MW8266_RX_DMA_BUF_SIZE];
 
 ImageUploadContext_t uploadCtx;
+
+static uint32_t gLastPhotoScanTick = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -219,9 +211,18 @@ int main(void) {
   LCD_Clear(LCD_COLOR_BLACK);
   res = f_mount(&gFatFs, "", 1);
   if (res == FR_OK) {
-    // bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
+    bmpRet = BMP_ShowFromSD("0:/hello.bmp", 0, 0);
     (void)bmpRet;
+    if (Album_ScanPhotos("0:/") == 0) {
+      printf("Photo scan success, total=%lu\r\n", (unsigned long)gPhotoCount);
+    } else {
+      printf("Photo scan failed\r\n");
+    }
+  } else {
+    printf("f_mount failed: %d\r\n", res);
   }
+  Album_ScanPhotos("0:/");
+
   GT911_Init();
   lv_init();
   lv_port_disp_init();
@@ -308,6 +309,8 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // PhotoScanTask();
+
     if (mw8266.rxFrameReady) {
       uint8_t linkId;
       uint16_t payloadLen;
@@ -324,7 +327,7 @@ int main(void) {
         mw8266.rxDmaBuf[mw8266.rxDmaBufSize - 1U] = '\0';
       }
 
-      printf("RX frame:\r\n%s\r\n", mw8266.rxDmaBuf);
+      // printf("RX frame:\r\n%s\r\n", mw8266.rxDmaBuf);
 
       /* 1. Connection state frames */
       if (strstr((char *)mw8266.rxDmaBuf, ",CONNECT") != NULL) {
@@ -386,6 +389,7 @@ int main(void) {
 
               if (ImageUpload_IsComplete(&uploadCtx)) {
                 ImageUpload_Close(&uploadCtx);
+                Album_ScanPhotos("0:/");
                 printf("HEX image upload complete: %s\r\n", uploadCtx.fileName);
 
                 /* 可选：这里可以加 JPG 头尾检查 */

@@ -58,7 +58,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/LV_PORT_INDEV/lv_port_indev.c
     Drivers/UI/ui_main.c
     Drivers/UI/photo_view.c
-    Drivers/UI/thumb_view.c
     ${LVGL_SOURCES}
     Drivers/JPEG/jpeg_viewer.c
     Middlewares/TJpgDec/tjpgd.c
