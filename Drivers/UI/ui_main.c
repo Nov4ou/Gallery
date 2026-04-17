@@ -4,12 +4,87 @@
 #include "photo_view.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
+#define GALLERY_PASSWORD "1234"
+#define PASSWORD_MAX_LEN 4U
+
+static lv_obj_t *lockScreen;
 static lv_obj_t *mainScreen;
 static lv_obj_t *categoryScreen;
 static lv_obj_t *photoImg;
+static lv_obj_t *passwordLabel;
+static lv_obj_t *passwordStatusLabel;
+static char passwordInput[PASSWORD_MAX_LEN + 1U];
+static uint8_t passwordInputLen = 0;
 
 extern uint32_t gCurrentPhotoIndex;
+
+typedef enum {
+  PasswordKeyDel = 10,
+  PasswordKeyOk,
+  PasswordKeyClear,
+} PasswordKey_t;
+
+static void PasswordInputReset(void) {
+  passwordInputLen = 0;
+  memset(passwordInput, 0, sizeof(passwordInput));
+}
+
+static void PasswordInputRefresh(void) {
+  char dots[PASSWORD_MAX_LEN + 1U];
+  uint8_t i;
+
+  for (i = 0; i < passwordInputLen; i++) {
+    dots[i] = '*';
+  }
+  dots[passwordInputLen] = '\0';
+
+  lv_label_set_text(passwordLabel, dots);
+}
+
+static void LockGallery(void) {
+  PasswordInputReset();
+  PasswordInputRefresh();
+  lv_label_set_text(passwordStatusLabel, "");
+  lv_screen_load(lockScreen);
+}
+
+static void PasswordKeyEvent(lv_event_t *e) {
+  uintptr_t key;
+
+  key = (uintptr_t)lv_event_get_user_data(e);
+
+  if (key <= 9U) {
+    if (passwordInputLen < PASSWORD_MAX_LEN) {
+      passwordInput[passwordInputLen] = (char)('0' + key);
+      passwordInputLen++;
+      passwordInput[passwordInputLen] = '\0';
+    }
+    lv_label_set_text(passwordStatusLabel, "");
+  } else if (key == PasswordKeyDel) {
+    if (passwordInputLen > 0U) {
+      passwordInputLen--;
+      passwordInput[passwordInputLen] = '\0';
+    }
+    lv_label_set_text(passwordStatusLabel, "");
+  } else if (key == PasswordKeyClear) {
+    PasswordInputReset();
+    lv_label_set_text(passwordStatusLabel, "");
+  } else if (key == PasswordKeyOk) {
+    if (strcmp(passwordInput, GALLERY_PASSWORD) == 0) {
+      PasswordInputReset();
+      PasswordInputRefresh();
+      lv_screen_load(mainScreen);
+      return;
+    }
+
+    PasswordInputReset();
+    lv_label_set_text(passwordStatusLabel, "Wrong password");
+  }
+
+  PasswordInputRefresh();
+}
 
 static void PrevBtnEvent(lv_event_t *e) {
   (void)e;
@@ -26,6 +101,11 @@ static void NextBtnEvent(lv_event_t *e) {
 static void CategoryBtnEvent(lv_event_t *e) {
   (void)e;
   lv_screen_load(categoryScreen);
+}
+
+static void LockBtnEvent(lv_event_t *e) {
+  (void)e;
+  LockGallery();
 }
 
 static void CategoryItemEvent(lv_event_t *e) {
@@ -66,6 +146,64 @@ static lv_obj_t *CreateButton(lv_obj_t *parent, const char *text, int16_t w,
   return btn;
 }
 
+static void AddPasswordButton(const char *text, uintptr_t key, int16_t x,
+                              int16_t y) {
+  lv_obj_t *btn;
+
+  btn = CreateButton(lockScreen, text, 90, 60);
+  lv_obj_set_pos(btn, x, y);
+  lv_obj_add_event_cb(btn, PasswordKeyEvent, LV_EVENT_CLICKED, (void *)key);
+}
+
+static void CreateLockScreen(void) {
+  lockScreen = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(lockScreen, lv_color_hex(0x111111), 0);
+  lv_obj_set_style_bg_opa(lockScreen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(lockScreen, 0, 0);
+
+  lv_obj_t *title = lv_label_create(lockScreen);
+  lv_label_set_text(title, "Private Gallery");
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 90);
+
+  lv_obj_t *prompt = lv_label_create(lockScreen);
+  lv_label_set_text(prompt, "Enter password");
+  lv_obj_set_style_text_color(prompt, lv_color_hex(0xDDDDDD), 0);
+  lv_obj_align(prompt, LV_ALIGN_TOP_MID, 0, 150);
+
+  lv_obj_t *passwordBox = lv_obj_create(lockScreen);
+  lv_obj_set_size(passwordBox, 260, 56);
+  lv_obj_align(passwordBox, LV_ALIGN_TOP_MID, 0, 200);
+  lv_obj_set_style_bg_color(passwordBox, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_border_color(passwordBox, lv_color_hex(0x666666), 0);
+  lv_obj_set_style_border_width(passwordBox, 2, 0);
+  lv_obj_set_style_radius(passwordBox, 8, 0);
+
+  passwordLabel = lv_label_create(passwordBox);
+  lv_label_set_text(passwordLabel, "");
+  lv_obj_set_style_text_color(passwordLabel, lv_color_white(), 0);
+  lv_obj_center(passwordLabel);
+
+  passwordStatusLabel = lv_label_create(lockScreen);
+  lv_label_set_text(passwordStatusLabel, "");
+  lv_obj_set_style_text_color(passwordStatusLabel, lv_color_hex(0xFF6666), 0);
+  lv_obj_align(passwordStatusLabel, LV_ALIGN_TOP_MID, 0, 270);
+
+  AddPasswordButton("1", 1, 85, 330);
+  AddPasswordButton("2", 2, 195, 330);
+  AddPasswordButton("3", 3, 305, 330);
+  AddPasswordButton("4", 4, 85, 410);
+  AddPasswordButton("5", 5, 195, 410);
+  AddPasswordButton("6", 6, 305, 410);
+  AddPasswordButton("7", 7, 85, 490);
+  AddPasswordButton("8", 8, 195, 490);
+  AddPasswordButton("9", 9, 305, 490);
+  AddPasswordButton("CLR", PasswordKeyClear, 85, 570);
+  AddPasswordButton("0", 0, 195, 570);
+  AddPasswordButton("Del", PasswordKeyDel, 305, 570);
+  AddPasswordButton("OK", PasswordKeyOk, 195, 650);
+}
+
 static void CreateMainScreen(void) {
   mainScreen = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(mainScreen, lv_color_hex(0x111111), 0);
@@ -84,6 +222,10 @@ static void CreateMainScreen(void) {
   lv_label_set_text(title, "Gallery");
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_center(title);
+
+  lv_obj_t *lockBtn = CreateButton(mainScreen, "Lock", 80, 40);
+  lv_obj_align(lockBtn, LV_ALIGN_TOP_RIGHT, -10, 10);
+  lv_obj_add_event_cb(lockBtn, LockBtnEvent, LV_EVENT_CLICKED, NULL);
 
   lv_obj_t *photoPanel = lv_obj_create(mainScreen);
   lv_obj_set_size(photoPanel, 440, 620);
@@ -151,8 +293,9 @@ static void CreateCategoryScreen(void) {
 }
 
 void ui_main_init(void) {
+  CreateLockScreen();
   CreateMainScreen();
   CreateCategoryScreen();
   PhotoView_BindImageObject(photoImg);
-  lv_screen_load(mainScreen);
+  LockGallery();
 }
