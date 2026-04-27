@@ -1,0 +1,17 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.example.galleryuploader"
+    compileSdk 36
+    compileSdkMinor 1
+
+    defaultConfig {
+        applicationId "com.example.galleryuploader"
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+    }
+}

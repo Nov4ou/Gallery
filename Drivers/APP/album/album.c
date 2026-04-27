@@ -15,6 +15,7 @@ static uint32_t gCategoryPhotoIndex[MAX_PHOTO_COUNT];
 static uint32_t gCategoryPhotoCount = 0;
 static uint32_t gCurrentCategoryIndex = 0;
 static AlbumCategory_t gCurrentCategory = AlbumCategoryAll;
+static AlbumPhotoChangedCallback_t gPhotoChangedCallback;
 
 static int StrCaseStr(const char *haystack, const char *needle);
 static int Album_MatchesCategory(const char *fileName, AlbumCategory_t category);
@@ -75,6 +76,160 @@ static int StrCaseStr(const char *haystack, const char *needle) {
   return 0;
 }
 
+static int IsDigitString(const char *text, uint32_t len) {
+  uint32_t i;
+
+  if (text == NULL) {
+    return 0;
+  }
+
+  if (strlen(text) != len) {
+    return 0;
+  }
+
+  for (i = 0; i < len; i++) {
+    if (text[i] < '0' || text[i] > '9') {
+      return 0;
+    }
+  }
+
+  return text[len] == '\0';
+}
+
+static int IsDateToken(const char *text) {
+  return IsDigitString(text, 8U);
+}
+
+static int IsTimeToken(const char *text) {
+  if (text == NULL) {
+    return 0;
+  }
+
+  if (IsDigitString(text, 4U)) {
+    return 1;
+  }
+
+  if (strlen(text) == 5U && text[0] >= '0' && text[0] <= '9' &&
+      text[1] >= '0' && text[1] <= '9' &&
+      (text[2] == '-' || text[2] == ':') && text[3] >= '0' &&
+      text[3] <= '9' && text[4] >= '0' && text[4] <= '9') {
+    return 1;
+  }
+
+  return 0;
+}
+
+static const char *Album_FileNameFromPath(const char *path) {
+  const char *slash;
+
+  if (path == NULL) {
+    return "";
+  }
+
+  slash = strrchr(path, '/');
+  if (slash == NULL) {
+    return path;
+  }
+
+  return slash + 1;
+}
+
+static void CopyFileStem(const char *path, char *stem, uint32_t stemSize) {
+  const char *fileName;
+  const char *ext;
+  size_t len;
+
+  if (stem == NULL || stemSize == 0U) {
+    return;
+  }
+
+  stem[0] = '\0';
+  fileName = Album_FileNameFromPath(path);
+  ext = strrchr(fileName, '.');
+  len = (ext != NULL) ? (size_t)(ext - fileName) : strlen(fileName);
+
+  if (len >= stemSize) {
+    len = stemSize - 1U;
+  }
+
+  memcpy(stem, fileName, len);
+  stem[len] = '\0';
+}
+
+static void FormatDateToken(const char *token, char *out, uint32_t outSize) {
+  if (out == NULL || outSize == 0U) {
+    return;
+  }
+
+  out[0] = '\0';
+  if (!IsDateToken(token) || outSize < 11U) {
+    return;
+  }
+
+  snprintf(out, outSize, "%c%c%c%c-%c%c-%c%c", token[0], token[1], token[2],
+           token[3], token[4], token[5], token[6], token[7]);
+}
+
+static void FormatTimeToken(const char *token, char *out, uint32_t outSize) {
+  if (out == NULL || outSize == 0U) {
+    return;
+  }
+
+  out[0] = '\0';
+  if (!IsTimeToken(token) || outSize < 6U) {
+    return;
+  }
+
+  if (strlen(token) == 4U) {
+    snprintf(out, outSize, "%c%c:%c%c", token[0], token[1], token[2],
+             token[3]);
+  } else {
+    snprintf(out, outSize, "%c%c:%c%c", token[0], token[1], token[3],
+             token[4]);
+  }
+}
+
+static void JoinPlaceTokens(char **tokens, uint32_t start, uint32_t count,
+                            char *place, uint32_t placeSize) {
+  uint32_t i;
+  uint32_t used = 0;
+
+  if (place == NULL || placeSize == 0U) {
+    return;
+  }
+
+  place[0] = '\0';
+  for (i = start; i < count; i++) {
+    int written;
+
+    if (tokens[i] == NULL || tokens[i][0] == '\0') {
+      continue;
+    }
+
+    written = snprintf(&place[used], placeSize - used, "%s%s",
+                       used == 0U ? "" : " ", tokens[i]);
+    if (written < 0) {
+      break;
+    }
+
+    if ((uint32_t)written >= (placeSize - used)) {
+      place[placeSize - 1U] = '\0';
+      break;
+    }
+
+    used += (uint32_t)written;
+  }
+}
+
+static void BuildFallbackLabel(const char *path, char *label,
+                               uint32_t labelSize) {
+  if (label == NULL || labelSize == 0U) {
+    return;
+  }
+
+  snprintf(label, labelSize, "%s", Album_FileNameFromPath(path));
+}
+
 static int Album_MatchesCategory(const char *fileName,
                                  AlbumCategory_t category) {
   switch (category) {
@@ -84,8 +239,8 @@ static int Album_MatchesCategory(const char *fileName,
     return StrCaseStr(fileName, "bld");
   case AlbumCategoryScenery:
     return StrCaseStr(fileName, "scn");
-  case AlbumCategoryGame:
-    return StrCaseStr(fileName, "gam");
+  case AlbumCategoryPlant:
+    return StrCaseStr(fileName, "plt");
   case AlbumCategoryPerson:
     return StrCaseStr(fileName, "per");
   case AlbumCategoryAnimal:
@@ -104,8 +259,8 @@ AlbumCategory_t Album_GetCategoryFromFileName(const char *fileName) {
     return AlbumCategoryScenery;
   }
 
-  if (Album_MatchesCategory(fileName, AlbumCategoryGame)) {
-    return AlbumCategoryGame;
+  if (Album_MatchesCategory(fileName, AlbumCategoryPlant)) {
+    return AlbumCategoryPlant;
   }
 
   if (Album_MatchesCategory(fileName, AlbumCategoryPerson)) {
@@ -212,8 +367,13 @@ int Album_ScanPhotos(const char *dirPath) {
 
     if (Album_IsJpgFile(fno.fname)) {
       if (gPhotoCount < MAX_PHOTO_COUNT) {
-        snprintf(gPhotoList[gPhotoCount], MAX_PHOTO_PATH, "%s%s", dirPath,
-                 fno.fname);
+        int len = snprintf(gPhotoList[gPhotoCount], MAX_PHOTO_PATH, "%s%s",
+                           dirPath, fno.fname);
+
+        if (len < 0 || len >= (int)MAX_PHOTO_PATH) {
+          printf("Photo path too long, skipped: %s%s\r\n", dirPath, fno.fname);
+          continue;
+        }
 
         printf("Found photo[%lu]: %s\r\n", (unsigned long)gPhotoCount,
                gPhotoList[gPhotoCount]);
@@ -298,6 +458,10 @@ int Album_ShowByIndex(uint32_t index) {
       gCurrentCategoryIndex = i;
       break;
     }
+  }
+
+  if (gPhotoChangedCallback != NULL) {
+    gPhotoChangedCallback(index);
   }
 
   return 0;
@@ -389,4 +553,101 @@ int Album_OpenUploadedPhoto(const char *fileName) {
   printf("Album_OpenUploadedPhoto: not found, fileName=%s path=%s\r\n",
          fileName, targetPath);
   return -2;
+}
+
+int Album_GetPhotoInfo(uint32_t index, AlbumPhotoInfo_t *info) {
+  char stem[MAX_PHOTO_PATH];
+  char *tokens[12];
+  uint32_t tokenCount = 0;
+  uint32_t dateIndex = 0xFFFFFFFFU;
+  uint32_t i;
+  char *cursor;
+
+  if (info == NULL) {
+    return -1;
+  }
+
+  memset(info, 0, sizeof(*info));
+
+  if (index >= gPhotoCount) {
+    return -2;
+  }
+
+  CopyFileStem(gPhotoList[index], stem, sizeof(stem));
+  cursor = stem;
+
+  while (tokenCount < (sizeof(tokens) / sizeof(tokens[0])) &&
+         cursor != NULL && cursor[0] != '\0') {
+    char *next = strchr(cursor, '_');
+
+    if (next != NULL) {
+      *next = '\0';
+      next++;
+    }
+
+    tokens[tokenCount] = cursor;
+    if (IsDateToken(cursor) && dateIndex == 0xFFFFFFFFU) {
+      dateIndex = tokenCount;
+    }
+
+    tokenCount++;
+    cursor = next;
+  }
+
+  if (dateIndex != 0xFFFFFFFFU) {
+    FormatDateToken(tokens[dateIndex], info->date, sizeof(info->date));
+
+    if ((dateIndex + 1U) < tokenCount && IsTimeToken(tokens[dateIndex + 1U])) {
+      FormatTimeToken(tokens[dateIndex + 1U], info->time, sizeof(info->time));
+      JoinPlaceTokens(tokens, dateIndex + 2U, tokenCount, info->place,
+                      sizeof(info->place));
+    } else {
+      JoinPlaceTokens(tokens, dateIndex + 1U, tokenCount, info->place,
+                      sizeof(info->place));
+    }
+  }
+
+  if (info->date[0] != '\0' && info->time[0] != '\0' &&
+      info->place[0] != '\0') {
+    snprintf(info->label, sizeof(info->label), "%s %s | %s", info->date,
+             info->time, info->place);
+  } else if (info->date[0] != '\0' && info->time[0] != '\0') {
+    snprintf(info->label, sizeof(info->label), "%s %s", info->date,
+             info->time);
+  } else if (info->date[0] != '\0' && info->place[0] != '\0') {
+    snprintf(info->label, sizeof(info->label), "%s | %s", info->date,
+             info->place);
+  } else if (info->date[0] != '\0') {
+    snprintf(info->label, sizeof(info->label), "%s", info->date);
+  } else {
+    BuildFallbackLabel(gPhotoList[index], info->label, sizeof(info->label));
+  }
+
+  for (i = 0; info->label[i] != '\0'; i++) {
+    if (info->label[i] == '_') {
+      info->label[i] = ' ';
+    }
+  }
+
+  return 0;
+}
+
+int Album_FormatPhotoLabel(uint32_t index, char *label, uint32_t labelSize) {
+  AlbumPhotoInfo_t info;
+
+  if (label == NULL || labelSize == 0U) {
+    return -1;
+  }
+
+  label[0] = '\0';
+  if (Album_GetPhotoInfo(index, &info) != 0) {
+    return -2;
+  }
+
+  snprintf(label, labelSize, "%s", info.label);
+  return 0;
+}
+
+void Album_SetPhotoChangedCallback(AlbumPhotoChangedCallback_t callback) {
+  gPhotoChangedCallback = callback;
 }

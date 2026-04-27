@@ -4,6 +4,8 @@
 #include "ff.h"
 #include <stdint.h>
 
+#define IMAGE_UPLOAD_FILE_NAME_MAX 128U
+
 typedef enum
 {
     UploadIdle = 0,
@@ -19,7 +21,7 @@ typedef struct
     uint32_t expectedBinarySize;   /* Final JPG File Size (Bytes) */
     uint32_t writtenBinarySize;    /* The number of bytes written to the file. */
 
-    char fileName[64];
+    char fileName[IMAGE_UPLOAD_FILE_NAME_MAX];
     FIL file;
 
     uint8_t halfByteValid;

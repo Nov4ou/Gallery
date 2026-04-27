@@ -2,6 +2,7 @@
 #include "album.h"
 #include "lvgl.h"
 #include "photo_view.h"
+#include "ui_font_zh.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,11 +11,36 @@
 #define PASSWORD_MAX_LEN 4U
 #define AUTOPLAY_INTERVAL_MS 3000U
 
+#define TXT_STOP "\xE5\x81\x9C\xE6\xAD\xA2"
+#define TXT_AUTO "\xE8\x87\xAA\xE5\x8A\xA8"
+#define TXT_WRONG_PASSWORD "\xE5\xAF\x86\xE7\xA0\x81\xE9\x94\x99\xE8\xAF\xAF"
+#define TXT_INPUT_CHAR "\xE8\xAF\xB7\xE8\xBE\x93\xE5\x85\xA5\xE5\xAD\x97\xE7\xAC\xA6"
+#define TXT_FOUND "\xE6\x89\xBE\xE5\x88\xB0"
+#define TXT_PRIVATE_GALLERY "\xE7\xA7\x81\xE5\xAF\x86\xE7\x9B\xB8\xE5\x86\x8C"
+#define TXT_ENTER_PASSWORD "\xE8\xBE\x93\xE5\x85\xA5\xE5\xAF\x86\xE7\xA0\x81"
+#define TXT_CLEAR "\xE6\xB8\x85\xE7\xA9\xBA"
+#define TXT_DELETE "\xE5\x88\xA0\xE9\x99\xA4"
+#define TXT_OK "\xE7\xA1\xAE\xE5\xAE\x9A"
+#define TXT_GALLERY "\xE7\x9B\xB8\xE5\x86\x8C"
+#define TXT_LOCK "\xE9\x94\x81\xE5\xAE\x9A"
+#define TXT_SEARCH "\xE6\x90\x9C\xE7\xB4\xA2"
+#define TXT_PREV "\xE4\xB8\x8A\xE4\xB8\x80\xE5\xBC\xA0"
+#define TXT_NEXT "\xE4\xB8\x8B\xE4\xB8\x80\xE5\xBC\xA0"
+#define TXT_CATEGORY "\xE5\x88\x86\xE7\xB1\xBB"
+#define TXT_BACK "\xE8\xBF\x94\xE5\x9B\x9E"
+#define TXT_ALL "\xE5\x85\xA8\xE9\x83\xA8"
+#define TXT_BUILDING "\xE5\xBB\xBA\xE7\xAD\x91"
+#define TXT_SCENERY "\xE6\x99\xAF\xE8\x89\xB2"
+#define TXT_PLANT "\xE6\xA4\x8D\xE7\x89\xA9"
+#define TXT_PERSON "\xE4\xBA\xBA\xE7\x89\xA9"
+#define TXT_ANIMAL "\xE5\x8A\xA8\xE7\x89\xA9"
+
 static lv_obj_t *lockScreen;
 static lv_obj_t *mainScreen;
 static lv_obj_t *categoryScreen;
 static lv_obj_t *searchScreen;
 static lv_obj_t *photoImg;
+static lv_obj_t *photoInfoLabel;
 static lv_obj_t *autoplayLabel;
 static lv_obj_t *passwordLabel;
 static lv_obj_t *passwordStatusLabel;
@@ -36,6 +62,46 @@ typedef enum {
 } PasswordKey_t;
 
 static void AutoplayStop(void);
+
+static void ApplyUIFont(lv_obj_t *obj) {
+  const lv_font_t *font = UI_FontZhGet();
+
+  if (obj != NULL && font != NULL) {
+    lv_obj_set_style_text_font(obj, font, 0);
+  }
+}
+
+static void ApplyUIFontTree(lv_obj_t *obj) {
+  uint32_t i;
+  uint32_t childCount;
+
+  if (obj == NULL) {
+    return;
+  }
+
+  ApplyUIFont(obj);
+  childCount = lv_obj_get_child_count(obj);
+
+  for (i = 0; i < childCount; i++) {
+    ApplyUIFontTree(lv_obj_get_child(obj, (int32_t)i));
+  }
+}
+
+static void UpdatePhotoInfoLabel(uint32_t index) {
+  char label[ALBUM_LABEL_MAX];
+
+  if (photoInfoLabel == NULL) {
+    return;
+  }
+
+  if (Album_FormatPhotoLabel(index, label, sizeof(label)) == 0) {
+    lv_label_set_text(photoInfoLabel, label);
+  } else {
+    lv_label_set_text(photoInfoLabel, "");
+  }
+}
+
+static void PhotoChangedCallback(uint32_t index) { UpdatePhotoInfoLabel(index); }
 
 static void PasswordInputReset(void) {
   passwordInputLen = 0;
@@ -68,9 +134,9 @@ static void AutoplayRefreshLabel(void) {
   }
 
   if (autoplayEnabled) {
-    lv_label_set_text(autoplayLabel, "Stop");
+    lv_label_set_text(autoplayLabel, TXT_STOP);
   } else {
-    lv_label_set_text(autoplayLabel, "Auto");
+    lv_label_set_text(autoplayLabel, TXT_AUTO);
   }
 }
 
@@ -137,7 +203,7 @@ static void PasswordKeyEvent(lv_event_t *e) {
     }
 
     PasswordInputReset();
-    lv_label_set_text(passwordStatusLabel, "Wrong password");
+    lv_label_set_text(passwordStatusLabel, TXT_WRONG_PASSWORD);
   }
 
   PasswordInputRefresh();
@@ -213,6 +279,7 @@ static lv_obj_t *CreateButton(lv_obj_t *parent, const char *text, int16_t w,
 
   label = lv_label_create(btn);
   lv_label_set_text(label, text);
+  ApplyUIFont(label);
   lv_obj_center(label);
 
   return btn;
@@ -288,7 +355,7 @@ static void SearchBuildResults(void) {
   lv_obj_clean(searchResultContainer);
 
   if (searchInput == '\0') {
-    lv_label_set_text(searchStatusLabel, "Input one character");
+    lv_label_set_text(searchStatusLabel, TXT_INPUT_CHAR);
     return;
   }
 
@@ -306,13 +373,14 @@ static void SearchBuildResults(void) {
 
       label = lv_label_create(btn);
       lv_label_set_text(label, FileNameFromPath(gPhotoList[i]));
+      ApplyUIFont(label);
       lv_obj_center(label);
 
       resultCount++;
     }
   }
 
-  snprintf(statusText, sizeof(statusText), "Found %lu",
+  snprintf(statusText, sizeof(statusText), TXT_FOUND " %lu",
            (unsigned long)resultCount);
   lv_label_set_text(searchStatusLabel, statusText);
 }
@@ -325,7 +393,7 @@ static void SearchKeyEvent(lv_event_t *e) {
   if (key == 0U) {
     searchInput = '\0';
     lv_obj_clean(searchResultContainer);
-    lv_label_set_text(searchStatusLabel, "Input one character");
+    lv_label_set_text(searchStatusLabel, TXT_INPUT_CHAR);
   } else {
     searchInput = (char)key;
     SearchBuildResults();
@@ -360,12 +428,12 @@ static void CreateLockScreen(void) {
   lv_obj_set_style_border_width(lockScreen, 0, 0);
 
   lv_obj_t *title = lv_label_create(lockScreen);
-  lv_label_set_text(title, "Private Gallery");
+  lv_label_set_text(title, TXT_PRIVATE_GALLERY);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 90);
 
   lv_obj_t *prompt = lv_label_create(lockScreen);
-  lv_label_set_text(prompt, "Enter password");
+  lv_label_set_text(prompt, TXT_ENTER_PASSWORD);
   lv_obj_set_style_text_color(prompt, lv_color_hex(0xDDDDDD), 0);
   lv_obj_align(prompt, LV_ALIGN_TOP_MID, 0, 150);
 
@@ -396,10 +464,10 @@ static void CreateLockScreen(void) {
   AddPasswordButton("7", 7, 85, 490);
   AddPasswordButton("8", 8, 195, 490);
   AddPasswordButton("9", 9, 305, 490);
-  AddPasswordButton("CLR", PasswordKeyClear, 85, 570);
+  AddPasswordButton(TXT_CLEAR, PasswordKeyClear, 85, 570);
   AddPasswordButton("0", 0, 195, 570);
-  AddPasswordButton("Del", PasswordKeyDel, 305, 570);
-  AddPasswordButton("OK", PasswordKeyOk, 195, 650);
+  AddPasswordButton(TXT_DELETE, PasswordKeyDel, 305, 570);
+  AddPasswordButton(TXT_OK, PasswordKeyOk, 195, 650);
 }
 
 static void CreateMainScreen(void) {
@@ -417,15 +485,15 @@ static void CreateMainScreen(void) {
   lv_obj_set_style_pad_all(titleBar, 0, 0);
 
   lv_obj_t *title = lv_label_create(titleBar);
-  lv_label_set_text(title, "Gallery");
+  lv_label_set_text(title, TXT_GALLERY);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_center(title);
 
-  lv_obj_t *lockBtn = CreateButton(mainScreen, "Lock", 80, 40);
+  lv_obj_t *lockBtn = CreateButton(mainScreen, TXT_LOCK, 80, 40);
   lv_obj_align(lockBtn, LV_ALIGN_TOP_RIGHT, -10, 10);
   lv_obj_add_event_cb(lockBtn, LockBtnEvent, LV_EVENT_CLICKED, NULL);
 
-  lv_obj_t *searchBtn = CreateButton(mainScreen, "Search", 90, 40);
+  lv_obj_t *searchBtn = CreateButton(mainScreen, TXT_SEARCH, 90, 40);
   lv_obj_align(searchBtn, LV_ALIGN_TOP_LEFT, 10, 10);
   lv_obj_add_event_cb(searchBtn, SearchBtnEvent, LV_EVENT_CLICKED, NULL);
 
@@ -436,7 +504,8 @@ static void CreateMainScreen(void) {
   lv_obj_add_event_cb(autoplayBtn, AutoplayBtnEvent, LV_EVENT_CLICKED, NULL);
 
   autoplayLabel = lv_label_create(autoplayBtn);
-  lv_label_set_text(autoplayLabel, "Auto");
+  lv_label_set_text(autoplayLabel, TXT_AUTO);
+  ApplyUIFont(autoplayLabel);
   lv_obj_center(autoplayLabel);
 
   lv_obj_t *photoPanel = lv_obj_create(mainScreen);
@@ -450,15 +519,31 @@ static void CreateMainScreen(void) {
   photoImg = lv_image_create(photoPanel);
   lv_obj_center(photoImg);
 
-  lv_obj_t *prevBtn = CreateButton(mainScreen, "Prev", 100, 50);
+  lv_obj_t *infoBar = lv_obj_create(photoPanel);
+  lv_obj_set_size(infoBar, 420, 54);
+  lv_obj_align(infoBar, LV_ALIGN_BOTTOM_MID, 0, -8);
+  lv_obj_set_style_bg_color(infoBar, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(infoBar, LV_OPA_70, 0);
+  lv_obj_set_style_border_width(infoBar, 0, 0);
+  lv_obj_set_style_radius(infoBar, 8, 0);
+  lv_obj_set_style_pad_all(infoBar, 8, 0);
+
+  photoInfoLabel = lv_label_create(infoBar);
+  lv_label_set_text(photoInfoLabel, "");
+  lv_label_set_long_mode(photoInfoLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_width(photoInfoLabel, 400);
+  lv_obj_set_style_text_color(photoInfoLabel, lv_color_white(), 0);
+  lv_obj_center(photoInfoLabel);
+
+  lv_obj_t *prevBtn = CreateButton(mainScreen, TXT_PREV, 100, 50);
   lv_obj_align(prevBtn, LV_ALIGN_BOTTOM_LEFT, 20, -20);
   lv_obj_add_event_cb(prevBtn, PrevBtnEvent, LV_EVENT_CLICKED, NULL);
 
-  lv_obj_t *nextBtn = CreateButton(mainScreen, "Next", 100, 50);
+  lv_obj_t *nextBtn = CreateButton(mainScreen, TXT_NEXT, 100, 50);
   lv_obj_align(nextBtn, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
   lv_obj_add_event_cb(nextBtn, NextBtnEvent, LV_EVENT_CLICKED, NULL);
 
-  lv_obj_t *categoryBtn = CreateButton(mainScreen, "Category", 140, 50);
+  lv_obj_t *categoryBtn = CreateButton(mainScreen, TXT_CATEGORY, 140, 50);
   lv_obj_align(categoryBtn, LV_ALIGN_BOTTOM_MID, 0, -20);
   lv_obj_add_event_cb(categoryBtn, CategoryBtnEvent, LV_EVENT_CLICKED, NULL);
 }
@@ -488,20 +573,20 @@ static void CreateCategoryScreen(void) {
   lv_obj_set_style_pad_all(titleBar, 0, 0);
 
   lv_obj_t *title = lv_label_create(titleBar);
-  lv_label_set_text(title, "Category");
+  lv_label_set_text(title, TXT_CATEGORY);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_center(title);
 
-  lv_obj_t *backBtn = CreateButton(categoryScreen, "Back", 80, 40);
+  lv_obj_t *backBtn = CreateButton(categoryScreen, TXT_BACK, 80, 40);
   lv_obj_align(backBtn, LV_ALIGN_TOP_LEFT, 10, 10);
   lv_obj_add_event_cb(backBtn, BackBtnEvent, LV_EVENT_CLICKED, NULL);
 
-  AddCategoryButton("All", AlbumCategoryAll, 100);
-  AddCategoryButton("BLD", AlbumCategoryBuilding, 190);
-  AddCategoryButton("SCN", AlbumCategoryScenery, 280);
-  AddCategoryButton("GAM", AlbumCategoryGame, 370);
-  AddCategoryButton("PER", AlbumCategoryPerson, 460);
-  AddCategoryButton("ANI", AlbumCategoryAnimal, 550);
+  AddCategoryButton(TXT_ALL, AlbumCategoryAll, 100);
+  AddCategoryButton(TXT_BUILDING, AlbumCategoryBuilding, 190);
+  AddCategoryButton(TXT_SCENERY, AlbumCategoryScenery, 280);
+  AddCategoryButton(TXT_PLANT, AlbumCategoryPlant, 370);
+  AddCategoryButton(TXT_PERSON, AlbumCategoryPerson, 460);
+  AddCategoryButton(TXT_ANIMAL, AlbumCategoryAnimal, 550);
 }
 
 static void CreateSearchScreen(void) {
@@ -522,11 +607,11 @@ static void CreateSearchScreen(void) {
   lv_obj_set_style_pad_all(titleBar, 0, 0);
 
   lv_obj_t *title = lv_label_create(titleBar);
-  lv_label_set_text(title, "Search");
+  lv_label_set_text(title, TXT_SEARCH);
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
   lv_obj_center(title);
 
-  lv_obj_t *backBtn = CreateButton(searchScreen, "Back", 80, 40);
+  lv_obj_t *backBtn = CreateButton(searchScreen, TXT_BACK, 80, 40);
   lv_obj_align(backBtn, LV_ALIGN_TOP_LEFT, 10, 10);
   lv_obj_add_event_cb(backBtn, BackBtnEvent, LV_EVENT_CLICKED, NULL);
 
@@ -544,7 +629,7 @@ static void CreateSearchScreen(void) {
   lv_obj_center(searchInputLabel);
 
   searchStatusLabel = lv_label_create(searchScreen);
-  lv_label_set_text(searchStatusLabel, "Input one character");
+  lv_label_set_text(searchStatusLabel, TXT_INPUT_CHAR);
   lv_obj_set_style_text_color(searchStatusLabel, lv_color_hex(0xDDDDDD), 0);
   lv_obj_align(searchStatusLabel, LV_ALIGN_TOP_MID, 0, 138);
 
@@ -559,7 +644,7 @@ static void CreateSearchScreen(void) {
                        (int16_t)(170 + row * 48));
   }
 
-  lv_obj_t *clearBtn = CreateButton(searchScreen, "CLR", 90, 38);
+  lv_obj_t *clearBtn = CreateButton(searchScreen, TXT_CLEAR, 90, 38);
   lv_obj_set_pos(clearBtn, 195, 458);
   lv_obj_add_event_cb(clearBtn, SearchKeyEvent, LV_EVENT_CLICKED, NULL);
 
@@ -579,10 +664,17 @@ static void CreateSearchScreen(void) {
 }
 
 void ui_main_init(void) {
+  UI_FontZhInit();
   CreateLockScreen();
   CreateMainScreen();
   CreateCategoryScreen();
   CreateSearchScreen();
+  ApplyUIFontTree(lockScreen);
+  ApplyUIFontTree(mainScreen);
+  ApplyUIFontTree(categoryScreen);
+  ApplyUIFontTree(searchScreen);
   PhotoView_BindImageObject(photoImg);
+  Album_SetPhotoChangedCallback(PhotoChangedCallback);
+  UpdatePhotoInfoLabel(gCurrentPhotoIndex);
   LockGallery();
 }

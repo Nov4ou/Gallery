@@ -42,7 +42,7 @@ void ImageUpload_Init(ImageUploadContext_t *ctx) {
 }
 
 int ImageUpload_ParseHexHeader(ImageUploadContext_t *ctx, const char *line) {
-  char name[64];
+  char name[IMAGE_UPLOAD_FILE_NAME_MAX];
   unsigned long size;
 
   if (ctx == NULL || line == NULL) {
@@ -52,7 +52,7 @@ int ImageUpload_ParseHexHeader(ImageUploadContext_t *ctx, const char *line) {
 
   printf("ParseHexHeader input = [%s]\r\n", line);
 
-  if (sscanf(line, "IMGHEX:%lu:%63s", &size, name) != 2) {
+  if (sscanf(line, "IMGHEX:%lu:%127s", &size, name) != 2) {
     printf("ParseHexHeader: sscanf failed\r\n");
     return -2;
   }
@@ -70,15 +70,21 @@ int ImageUpload_ParseHexHeader(ImageUploadContext_t *ctx, const char *line) {
 }
 
 int ImageUpload_StartHexFile(ImageUploadContext_t *ctx) {
-  char path[96];
+  char path[160];
   FRESULT res;
+  int len;
 
   if (ctx == NULL) {
     printf("StartHexFile: ctx NULL\r\n");
     return -1;
   }
 
-  snprintf(path, sizeof(path), "0:/%s", ctx->fileName);
+  len = snprintf(path, sizeof(path), "0:/%s", ctx->fileName);
+  if (len < 0 || len >= (int)sizeof(path)) {
+    printf("StartHexFile: path too long\r\n");
+    ctx->state = UploadError;
+    return -3;
+  }
 
   printf("StartHexFile path=[%s]\r\n", path);
   printf("expectedBinarySize=%lu\r\n", (unsigned long)ctx->expectedBinarySize);

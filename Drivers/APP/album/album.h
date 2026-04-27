@@ -6,7 +6,9 @@
 #define EXT_SRAM_BASE ((uint32_t)0x68000000U)
 
 #define MAX_PHOTO_COUNT 64U
-#define MAX_PHOTO_PATH 64U
+#define MAX_PHOTO_PATH 160U
+#define ALBUM_PLACE_MAX 48U
+#define ALBUM_LABEL_MAX 96U
 
 #define PHOTO_DISPLAY_BUF ((uint16_t *)(EXT_SRAM_BASE + 0x000000U))
 
@@ -21,11 +23,20 @@ extern char gPhotoList[MAX_PHOTO_COUNT][MAX_PHOTO_PATH];
 extern uint32_t gPhotoCount;
 extern uint32_t gCurrentPhotoIndex;
 
+typedef void (*AlbumPhotoChangedCallback_t)(uint32_t index);
+
+typedef struct {
+  char date[11];
+  char time[6];
+  char place[ALBUM_PLACE_MAX];
+  char label[ALBUM_LABEL_MAX];
+} AlbumPhotoInfo_t;
+
 typedef enum {
   AlbumCategoryAll = 0,
   AlbumCategoryBuilding,
   AlbumCategoryScenery,
-  AlbumCategoryGame,
+  AlbumCategoryPlant,
   AlbumCategoryPerson,
   AlbumCategoryAnimal,
 } AlbumCategory_t;
@@ -43,5 +54,8 @@ uint32_t Album_GetCategoryCount(void);
 uint32_t Album_GetCount(void);
 AlbumCategory_t Album_GetCategoryFromFileName(const char *fileName);
 int Album_OpenUploadedPhoto(const char *fileName);
+int Album_GetPhotoInfo(uint32_t index, AlbumPhotoInfo_t *info);
+int Album_FormatPhotoLabel(uint32_t index, char *label, uint32_t labelSize);
+void Album_SetPhotoChangedCallback(AlbumPhotoChangedCallback_t callback);
 
 #endif
