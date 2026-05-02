@@ -66,6 +66,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/APP/album/album.c
     Drivers/APP/upload/image_upload.c
     Drivers/WIFI/mw8266.c
+    Drivers/ES8388/es8388.c
 )
 
 # Add include paths
@@ -86,6 +87,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/APP/album
     Drivers/APP/upload
     Drivers/WIFI
+    Drivers/ES8388
 )
 
 # Add project symbols (macros)
