@@ -25,6 +25,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -46,9 +47,22 @@ public class MainActivity extends Activity {
     private static final int RAW_CHUNK_SIZE = 512;
     private static final int CONNECT_SETTLE_DELAY_MS = 1200;
     private static final int SEND_DELAY_MS = 500;
+
     private static final int TARGET_IMAGE_MAX_WIDTH = 480;
     private static final int TARGET_IMAGE_MAX_HEIGHT = 800;
-    private static final int JPEG_QUALITY = 88;
+
+    // Hard limit: final JPG file must be smaller than 40KB.
+    private static final int MAX_FINAL_JPEG_BYTES = 40 * 1024;
+
+    // Use a slightly lower internal target to leave some safety margin.
+    private static final int TARGET_JPEG_BYTES = 39 * 1024;
+
+    // JPEG quality search range.
+    private static final int JPEG_QUALITY_MAX = 85;
+    private static final int JPEG_QUALITY_MIN = 1;
+
+    // If quality compression is not enough, shrink the image repeatedly.
+    private static final float IMAGE_SHRINK_STEP = 0.80f;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
@@ -145,21 +159,22 @@ public class MainActivity extends Activity {
         previewImage.setImageURI(uri);
         sendButton.setEnabled(false);
         progressBar.setProgress(0);
-        setStatus("Resizing image...");
+        setStatus("Compressing image...");
 
         executor.execute(() -> {
             try {
                 File cacheFile = resizeUriToJpegCache(uri);
                 selectedCacheFile = cacheFile;
+
                 runOnUiThread(() -> {
                     previewImage.setImageURI(Uri.fromFile(cacheFile));
                     sendButton.setEnabled(true);
                     setStatus("Selected: " + selectedDisplayName +
-                            "\nResized to fit " + TARGET_IMAGE_MAX_WIDTH + "x" + TARGET_IMAGE_MAX_HEIGHT +
+                            "\nCompressed target: less than 40KB" +
                             "\nSend size: " + cacheFile.length() + " bytes");
                 });
             } catch (IOException e) {
-                runOnUiThread(() -> setStatus("Failed to resize image: " + e.getMessage()));
+                runOnUiThread(() -> setStatus("Failed to compress image: " + e.getMessage()));
             }
         });
     }
@@ -178,8 +193,14 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if (file.length() >= MAX_FINAL_JPEG_BYTES) {
+            Toast.makeText(this, "Image is still larger than 40KB.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         String host = hostEdit.getText().toString().trim();
         int port;
+
         try {
             port = Integer.parseInt(portEdit.getText().toString().trim());
         } catch (NumberFormatException e) {
@@ -192,6 +213,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "File name is empty.", Toast.LENGTH_SHORT).show();
             return;
         }
+
         if (!fileName.toLowerCase(Locale.US).endsWith(".jpg") &&
                 !fileName.toLowerCase(Locale.US).endsWith(".jpeg")) {
             fileName = fileName + ".jpg";
@@ -205,6 +227,7 @@ public class MainActivity extends Activity {
         executor.execute(() -> {
             try {
                 uploadFile(host, port, finalFileName, file);
+
                 runOnUiThread(() -> {
                     progressBar.setProgress(100);
                     sendButton.setEnabled(true);
@@ -221,18 +244,25 @@ public class MainActivity extends Activity {
 
     private void uploadFile(String host, int port, String fileName, File file) throws IOException {
         long totalBytes = file.length();
+
         if (totalBytes <= 0) {
             throw new IOException("selected image is empty");
+        }
+
+        if (totalBytes >= MAX_FINAL_JPEG_BYTES) {
+            throw new IOException("compressed image is larger than 40KB");
         }
 
         try (Socket socket = createWifiSocket()) {
             socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
             sleepMs(CONNECT_SETTLE_DELAY_MS);
+
             OutputStream socketOutput = socket.getOutputStream();
 
             String header = "IMGHEX:" + totalBytes + ":" + fileName + "\n";
             socketOutput.write(header.getBytes(StandardCharsets.US_ASCII));
             socketOutput.flush();
+
             sleepMs(SEND_DELAY_MS);
             runOnUiThread(() -> setStatus("Header sent.\nSending image..."));
 
@@ -242,14 +272,17 @@ public class MainActivity extends Activity {
 
             try (BufferedInputStream fileInput = new BufferedInputStream(new FileInputStream(file))) {
                 int read;
+
                 while ((read = fileInput.read(raw)) > 0) {
                     int hexLen = encodeHex(raw, read, hex);
                     socketOutput.write(hex, 0, hexLen);
                     socketOutput.flush();
+
                     sleepMs(SEND_DELAY_MS);
 
                     sentRawBytes += read;
                     int progress = (int) ((sentRawBytes * 100L) / totalBytes);
+
                     runOnUiThread(() -> {
                         progressBar.setProgress(progress);
                         setStatus("Sending image...\n" + progress + "%");
@@ -265,9 +298,11 @@ public class MainActivity extends Activity {
 
         if (connectivityManager != null) {
             Network[] networks = connectivityManager.getAllNetworks();
+
             for (Network network : networks) {
                 NetworkCapabilities capabilities =
                         connectivityManager.getNetworkCapabilities(network);
+
                 if (capabilities != null &&
                         capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                     return network.getSocketFactory().createSocket();
@@ -308,6 +343,7 @@ public class MainActivity extends Activity {
             if (input == null) {
                 throw new IOException("cannot open selected image");
             }
+
             BitmapFactory.decodeStream(input, null, bounds);
         }
 
@@ -323,10 +359,12 @@ public class MainActivity extends Activity {
                 TARGET_IMAGE_MAX_HEIGHT);
 
         Bitmap decoded;
+
         try (InputStream input = getContentResolver().openInputStream(uri)) {
             if (input == null) {
                 throw new IOException("cannot open selected image");
             }
+
             decoded = BitmapFactory.decodeStream(input, null, decodeOptions);
         }
 
@@ -334,32 +372,133 @@ public class MainActivity extends Activity {
             throw new IOException("cannot decode selected image");
         }
 
+        Bitmap workingBitmap = decoded;
+
         int outWidth = decoded.getWidth();
         int outHeight = decoded.getHeight();
+
         float scale = Math.min(
                 TARGET_IMAGE_MAX_WIDTH / (float) outWidth,
                 TARGET_IMAGE_MAX_HEIGHT / (float) outHeight);
 
-        Bitmap outputBitmap = decoded;
         if (scale < 1.0f) {
             int scaledWidth = Math.max(1, Math.round(outWidth * scale));
             int scaledHeight = Math.max(1, Math.round(outHeight * scale));
-            outputBitmap = Bitmap.createScaledBitmap(decoded, scaledWidth, scaledHeight, true);
-        }
 
-        File file = File.createTempFile("gallery_upload_", ".jpg", getCacheDir());
-        try (FileOutputStream output = new FileOutputStream(file)) {
-            if (!outputBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
-                throw new IOException("cannot encode resized image");
-            }
-        } finally {
-            if (outputBitmap != decoded) {
-                outputBitmap.recycle();
-            }
+            workingBitmap = Bitmap.createScaledBitmap(decoded, scaledWidth, scaledHeight, true);
             decoded.recycle();
         }
 
+        byte[] jpegBytes;
+
+        try {
+            jpegBytes = encodeJpegStrictlyBelow40KB(workingBitmap);
+        } finally {
+            workingBitmap.recycle();
+        }
+
+        if (jpegBytes.length >= MAX_FINAL_JPEG_BYTES) {
+            throw new IOException("cannot compress image below 40KB");
+        }
+
+        File file = File.createTempFile("gallery_upload_", ".jpg", getCacheDir());
+
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write(jpegBytes);
+        }
+
+        if (file.length() >= MAX_FINAL_JPEG_BYTES) {
+            throw new IOException("compressed image is still larger than 40KB");
+        }
+
         return file;
+    }
+
+    private byte[] encodeJpegStrictlyBelow40KB(Bitmap sourceBitmap) throws IOException {
+        Bitmap currentBitmap = sourceBitmap;
+        boolean ownsCurrentBitmap = false;
+
+        try {
+            while (true) {
+                byte[] bestBytes = findBestJpegBytesBelowTarget(currentBitmap);
+
+                if (bestBytes != null && bestBytes.length < MAX_FINAL_JPEG_BYTES) {
+                    return bestBytes;
+                }
+
+                int currentWidth = currentBitmap.getWidth();
+                int currentHeight = currentBitmap.getHeight();
+
+                if (currentWidth <= 1 && currentHeight <= 1) {
+                    byte[] smallestBytes = compressBitmapToJpegBytes(currentBitmap, JPEG_QUALITY_MIN);
+
+                    if (smallestBytes.length < MAX_FINAL_JPEG_BYTES) {
+                        return smallestBytes;
+                    }
+
+                    throw new IOException("cannot compress image below 40KB");
+                }
+
+                int newWidth = Math.max(1, Math.round(currentWidth * IMAGE_SHRINK_STEP));
+                int newHeight = Math.max(1, Math.round(currentHeight * IMAGE_SHRINK_STEP));
+
+                if (newWidth >= currentWidth && currentWidth > 1) {
+                    newWidth = currentWidth - 1;
+                }
+
+                if (newHeight >= currentHeight && currentHeight > 1) {
+                    newHeight = currentHeight - 1;
+                }
+
+                Bitmap smallerBitmap = Bitmap.createScaledBitmap(
+                        currentBitmap,
+                        newWidth,
+                        newHeight,
+                        true);
+
+                if (ownsCurrentBitmap) {
+                    currentBitmap.recycle();
+                }
+
+                currentBitmap = smallerBitmap;
+                ownsCurrentBitmap = true;
+            }
+        } finally {
+            if (ownsCurrentBitmap) {
+                currentBitmap.recycle();
+            }
+        }
+    }
+
+    private byte[] findBestJpegBytesBelowTarget(Bitmap bitmap) throws IOException {
+        byte[] bestBytes = null;
+
+        int low = JPEG_QUALITY_MIN;
+        int high = JPEG_QUALITY_MAX;
+
+        while (low <= high) {
+            int quality = (low + high) / 2;
+            byte[] jpegBytes = compressBitmapToJpegBytes(bitmap, quality);
+
+            if (jpegBytes.length <= TARGET_JPEG_BYTES) {
+                bestBytes = jpegBytes;
+                low = quality + 1;
+            } else {
+                high = quality - 1;
+            }
+        }
+
+        return bestBytes;
+    }
+
+    private byte[] compressBitmapToJpegBytes(Bitmap bitmap, int quality) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
+            throw new IOException("cannot encode JPEG");
+        }
+
+        return output.toByteArray();
     }
 
     private int calculateInSampleSize(int srcWidth, int srcHeight, int reqWidth, int reqHeight) {
@@ -377,8 +516,10 @@ public class MainActivity extends Activity {
         try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
                 int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+
                 if (index >= 0) {
                     String name = cursor.getString(index);
+
                     if (name != null && !name.isEmpty()) {
                         return name;
                     }
@@ -393,7 +534,9 @@ public class MainActivity extends Activity {
     private void refreshSuggestedFileName() {
         CategoryItem item = (CategoryItem) categorySpinner.getSelectedItem();
         String category = item == null ? "SCN" : item.code;
+
         String place = sanitizeToken(placeEdit == null ? "Phone" : placeEdit.getText().toString());
+
         if (place.isEmpty()) {
             place = "Phone";
         }
@@ -408,9 +551,12 @@ public class MainActivity extends Activity {
         }
 
         StringBuilder out = new StringBuilder();
+
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+
+            if ((c >= 'A' && c <= 'Z') ||
+                    (c >= 'a' && c <= 'z') ||
                     (c >= '0' && c <= '9')) {
                 out.append(c);
             } else if (c == '_' || c == '-' || c == ' ') {
@@ -418,7 +564,9 @@ public class MainActivity extends Activity {
             }
         }
 
-        return out.toString().replaceAll("_+", "_").replaceAll("^_|_$", "");
+        return out.toString()
+                .replaceAll("_+", "_")
+                .replaceAll("^_|_$", "");
     }
 
     private String sanitizeFileName(String text) {
@@ -438,6 +586,7 @@ public class MainActivity extends Activity {
         }
 
         String token = sanitizeToken(base);
+
         if (token.isEmpty()) {
             return "";
         }

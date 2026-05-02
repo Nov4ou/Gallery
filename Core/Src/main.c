@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "album.h"
 #include "bmp.h"
+#include "es8388.h"
 #include "gt911.h"
 #include "image_scale.h"
 #include "image_upload.h"
@@ -37,6 +38,7 @@
 #include "stdint.h"
 #include "string.h"
 #include "ui_main.h"
+#include "stm32f4xx_hal_i2s.h"
 #include <stdio.h>
 
 /* USER CODE END Includes */
@@ -49,6 +51,11 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MW8266_RX_DMA_BUF_SIZE 4096U
+
+#define ES8388_ADDR_7BIT 0x10
+#define ES8388_ADDR (ES8388_ADDR_7BIT << 1)
+#define AUDIO_TEST_TONE_FRAMES 48U
+#define AUDIO_TEST_TONE_WORDS (AUDIO_TEST_TONE_FRAMES * 2U)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,6 +64,11 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+I2S_HandleTypeDef hi2s2;
+DMA_HandleTypeDef hdma_spi2_tx;
+
 SD_HandleTypeDef hsd;
 
 TIM_HandleTypeDef htim12;
@@ -84,6 +96,11 @@ uint8_t mw8266RxDmaBuf[MW8266_RX_DMA_BUF_SIZE];
 ImageUploadContext_t uploadCtx;
 
 static uint32_t gLastPhotoScanTick = 0;
+
+ES8388_HandleTypeDef hEs8388;
+ES8388_ProbeResultTypeDef es8388Probe;
+static int16_t gAudioTestTone[AUDIO_TEST_TONE_WORDS];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -95,9 +112,16 @@ static void MX_USART1_UART_Init(void);
 static void MX_TIM12_Init(void);
 static void MX_FSMC_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_I2S2_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 static void FormatSdCard(void);
 static void CreateTestFile(void);
+static void I2C1_BusRecovery(void);
+static void AudioTestTone_InitBuffer(void);
+static HAL_StatusTypeDef AudioTestTone_Start(void);
+static uint8_t ES8388_IsPlaybackConfigActive(
+    const ES8388_ProbeResultTypeDef *probe);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -160,6 +184,37 @@ static int ParseImageHeader(const char *payload, uint32_t *fileSize,
 
   return 0;
 }
+
+static void AudioTestTone_InitBuffer(void) {
+  static const int16_t kMonoWave[AUDIO_TEST_TONE_FRAMES] = {
+      2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500,
+      2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500,
+      -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500,
+      -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500,
+      -2500, -2500, -2500, -2500};
+
+  for (uint32_t i = 0; i < AUDIO_TEST_TONE_FRAMES; i++) {
+    gAudioTestTone[i * 2U] = kMonoWave[i];
+    gAudioTestTone[i * 2U + 1U] = kMonoWave[i];
+  }
+}
+
+static HAL_StatusTypeDef AudioTestTone_Start(void) {
+  AudioTestTone_InitBuffer();
+  return HAL_I2S_Transmit_DMA(&hi2s2, (uint16_t *)gAudioTestTone,
+                              AUDIO_TEST_TONE_WORDS);
+}
+
+static uint8_t ES8388_IsPlaybackConfigActive(
+    const ES8388_ProbeResultTypeDef *probe) {
+  if (probe == NULL) {
+    return 0U;
+  }
+
+  return (uint8_t)(probe->reg00 == 0x05 && probe->reg01 == 0x40 &&
+                   probe->reg02 == 0xF3 && probe->reg04 == 0x30 &&
+                   probe->reg08 == 0x00);
+}
 /* USER CODE END 0 */
 
 /**
@@ -200,6 +255,8 @@ int main(void)
   MX_TIM12_Init();
   MX_FSMC_Init();
   MX_USART3_UART_Init();
+  MX_I2S2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   // HAL_Delay(1000);
   // FormatSdCard();
@@ -222,6 +279,77 @@ int main(void)
   } else {
     printf("f_mount failed: %d\r\n", res);
   }
+
+  uint8_t es8388Address = 0;
+  if (ES8388_Detect(&hEs8388, &hi2c1, &es8388Address) == HAL_OK) {
+    printf("ES8388 detected at 7-bit address: 0x%02X\r\n", es8388Address);
+
+    HAL_Delay(20);
+
+    if (ES8388_ReadProbeRegisters(&hEs8388, &es8388Probe) == HAL_OK) {
+      printf("ES8388 probe registers:\r\n");
+      printf("REG00 = 0x%02X\r\n", es8388Probe.reg00);
+      printf("REG01 = 0x%02X\r\n", es8388Probe.reg01);
+      printf("REG02 = 0x%02X\r\n", es8388Probe.reg02);
+      printf("REG03 = 0x%02X\r\n", es8388Probe.reg03);
+      printf("REG04 = 0x%02X\r\n", es8388Probe.reg04);
+      printf("REG08 = 0x%02X\r\n", es8388Probe.reg08);
+
+      if (ES8388_CheckDefaultRegisters(&es8388Probe)) {
+        printf("ES8388 default register check: PASS\r\n");
+      } else {
+        printf("ES8388 default register check: NOT MATCH\r\n");
+      }
+
+      if (ES8388_IsPlaybackConfigActive(&es8388Probe)) {
+        printf("ES8388 playback config already active, skip re-init\r\n");
+
+        if (AudioTestTone_Start() == HAL_OK) {
+          printf("I2S DMA test tone started on headphone output\r\n");
+        } else {
+          printf("I2S DMA test tone start failed: i2s=0x%08lX dma=0x%08lX\r\n",
+                 (unsigned long)HAL_I2S_GetError(&hi2s2),
+                 (unsigned long)hdma_spi2_tx.ErrorCode);
+        }
+      } else {
+        if (ES8388_InitForPlaybackHeadphone(&hEs8388) == HAL_OK) {
+          if (ES8388_AddaConfig(&hEs8388, 1, 0) == HAL_OK &&
+              ES8388_OutputConfig(&hEs8388, 1, 1) == HAL_OK &&
+              ES8388_SetHeadphoneVolume(&hEs8388, 25) == HAL_OK) {
+            printf("ES8388 headphone playback init OK\r\n");
+
+            if (AudioTestTone_Start() == HAL_OK) {
+              printf("I2S DMA test tone started on headphone output\r\n");
+            } else {
+              printf(
+                  "I2S DMA test tone start failed: i2s=0x%08lX dma=0x%08lX\r\n",
+                  (unsigned long)HAL_I2S_GetError(&hi2s2),
+                  (unsigned long)hdma_spi2_tx.ErrorCode);
+            }
+          } else {
+            printf(
+                "ES8388 post-init audio path setup failed, reg=0x%02X "
+                "value=0x%02X halError=0x%08lX\r\n",
+                ES8388_GetLastReg(&hEs8388), ES8388_GetLastValue(&hEs8388),
+                ES8388_GetLastError(&hEs8388));
+          }
+        } else {
+          printf(
+              "ES8388 headphone playback init failed, reg=0x%02X value=0x%02X "
+              "halError=0x%08lX\r\n",
+              ES8388_GetLastReg(&hEs8388), ES8388_GetLastValue(&hEs8388),
+              ES8388_GetLastError(&hEs8388));
+        }
+      }
+    } else {
+      printf("ES8388 register read failed, halError=0x%08lX\r\n",
+             ES8388_GetLastError(&hEs8388));
+    }
+  } else {
+    printf("ES8388 not detected, halError=0x%08lX\r\n",
+           ES8388_GetLastError(&hEs8388));
+  }
+
   Album_ScanPhotos("0:/");
 
   GT911_Init();
@@ -464,6 +592,74 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief I2S2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2S2_Init(void)
+{
+
+  /* USER CODE BEGIN I2S2_Init 0 */
+
+  /* USER CODE END I2S2_Init 0 */
+
+  /* USER CODE BEGIN I2S2_Init 1 */
+
+  /* USER CODE END I2S2_Init 1 */
+  hi2s2.Instance = SPI2;
+  hi2s2.Init.Mode = I2S_MODE_MASTER_TX;
+  hi2s2.Init.Standard = I2S_STANDARD_PHILIPS;
+  hi2s2.Init.DataFormat = I2S_DATAFORMAT_16B;
+  hi2s2.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
+  hi2s2.Init.AudioFreq = I2S_AUDIOFREQ_48K;
+  hi2s2.Init.CPOL = I2S_CPOL_LOW;
+  hi2s2.Init.ClockSource = I2S_CLOCK_PLL;
+  hi2s2.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
+  if (HAL_I2S_Init(&hi2s2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2S2_Init 2 */
+
+  /* USER CODE END I2S2_Init 2 */
+
+}
+
+/**
   * @brief SDIO Initialization Function
   * @param None
   * @retval None
@@ -622,6 +818,9 @@ static void MX_DMA_Init(void)
   /* DMA1_Stream1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
 }
 
@@ -792,6 +991,36 @@ static void MX_FSMC_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+static void I2C1_BusRecovery(void) {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
+  HAL_Delay(1);
+
+  for (uint32_t i = 0; i < 9; i++) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+    HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_Delay(1);
+  }
+
+  /* Generate a STOP condition: SDA low while SCL high, then SDA high. */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+  HAL_Delay(1);
+}
+
 static void FormatSdCard(void) {
   FRESULT res;
   BYTE workBuffer[_MAX_SS];
