@@ -56,8 +56,11 @@
 #define ES8388_ADDR (ES8388_ADDR_7BIT << 1)
 #define AUDIO_TEST_TONE_FRAMES 48U
 #define AUDIO_TEST_TONE_WORDS (AUDIO_TEST_TONE_FRAMES * 2U)
-#define WAV_DMA_HALFWORDS_PER_HALF 1024U
+#define WAV_DMA_HALFWORDS_PER_HALF 512U
 #define WAV_DMA_BUFFER_HALFWORDS (WAV_DMA_HALFWORDS_PER_HALF * 2U)
+#define AUDIO_FILE_OBJ_OFFSET \
+  (JPG_DECODE_BUF_OFFSET + JPG_DECODE_BUF_SIZE_BYTES)
+#define AUDIO_FILE_OBJ ((FIL *)(EXT_SRAM_BASE + AUDIO_FILE_OBJ_OFFSET))
 
 #define AUDIO_OUTPUT_HEADPHONE 0U
 #define AUDIO_OUTPUT_SPEAKER 1U
@@ -108,7 +111,7 @@ ES8388_ProbeResultTypeDef es8388Probe;
 static int16_t gAudioTestTone[AUDIO_TEST_TONE_WORDS];
 
 typedef struct {
-  FIL file;
+  FIL *file;
   uint8_t isOpen;
   uint8_t isPlaying;
   uint8_t pendingHalf0;
@@ -380,7 +383,7 @@ static HAL_StatusTypeDef WavPlayback_RefillHalf(WavPlaybackContext_t *ctx,
         break;
       }
 
-      fr = f_lseek(&ctx->file, ctx->dataOffset);
+      fr = f_lseek(ctx->file, ctx->dataOffset);
       if (fr != FR_OK) {
         return HAL_ERROR;
       }
@@ -391,7 +394,7 @@ static HAL_StatusTypeDef WavPlayback_RefillHalf(WavPlaybackContext_t *ctx,
       chunkRequest = ctx->dataRemaining;
     }
 
-    fr = f_read(&ctx->file, &dstBytes[filledBytes], chunkRequest, &bytesRead);
+    fr = f_read(ctx->file, &dstBytes[filledBytes], chunkRequest, &bytesRead);
     if (fr != FR_OK) {
       return HAL_ERROR;
     }
@@ -413,7 +416,7 @@ static void AudioPlayback_Stop(void) {
   }
 
   if (gWavPlayback.isOpen != 0U) {
-    (void)f_close(&gWavPlayback.file);
+    (void)f_close(gWavPlayback.file);
   }
 
   memset(&gWavPlayback, 0, sizeof(gWavPlayback));
@@ -426,15 +429,16 @@ static HAL_StatusTypeDef AudioPlayback_StartWav(const char *path) {
   AudioPlayback_Stop();
   memset(&gWavPlayback, 0, sizeof(gWavPlayback));
   gWavPlayback.loopEnabled = 1U;
+  gWavPlayback.file = AUDIO_FILE_OBJ;
 
-  fr = f_open(&gWavPlayback.file, path, FA_READ);
+  fr = f_open(gWavPlayback.file, path, FA_READ);
   if (fr != FR_OK) {
     printf("WAV open failed: %d\r\n", fr);
     return HAL_ERROR;
   }
   gWavPlayback.isOpen = 1U;
 
-  parseRet = WavPlayback_ParseHeader(&gWavPlayback.file, &gWavPlayback);
+  parseRet = WavPlayback_ParseHeader(gWavPlayback.file, &gWavPlayback);
   if (parseRet != 0) {
     printf("WAV parse failed: %d\r\n", parseRet);
     AudioPlayback_Stop();
