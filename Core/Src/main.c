@@ -56,6 +56,12 @@
 #define ES8388_ADDR (ES8388_ADDR_7BIT << 1)
 #define AUDIO_TEST_TONE_FRAMES 48U
 #define AUDIO_TEST_TONE_WORDS (AUDIO_TEST_TONE_FRAMES * 2U)
+#define WAV_DMA_HALFWORDS_PER_HALF 1024U
+#define WAV_DMA_BUFFER_HALFWORDS (WAV_DMA_HALFWORDS_PER_HALF * 2U)
+
+#define AUDIO_OUTPUT_HEADPHONE 0U
+#define AUDIO_OUTPUT_SPEAKER 1U
+#define AUDIO_OUTPUT_TARGET AUDIO_OUTPUT_HEADPHONE
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -101,6 +107,22 @@ ES8388_HandleTypeDef hEs8388;
 ES8388_ProbeResultTypeDef es8388Probe;
 static int16_t gAudioTestTone[AUDIO_TEST_TONE_WORDS];
 
+typedef struct {
+  FIL file;
+  uint8_t isOpen;
+  uint8_t isPlaying;
+  uint8_t pendingHalf0;
+  uint8_t pendingHalf1;
+  uint8_t loopEnabled;
+  uint32_t sampleRate;
+  uint32_t dataOffset;
+  uint32_t dataSize;
+  uint32_t dataRemaining;
+  uint16_t dmaBuffer[WAV_DMA_BUFFER_HALFWORDS];
+} WavPlaybackContext_t;
+
+static WavPlaybackContext_t gWavPlayback;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -122,6 +144,11 @@ static void AudioTestTone_InitBuffer(void);
 static HAL_StatusTypeDef AudioTestTone_Start(void);
 static uint8_t ES8388_IsPlaybackConfigActive(
     const ES8388_ProbeResultTypeDef *probe);
+static HAL_StatusTypeDef AudioPlayback_StartWav(const char *path);
+static void AudioPlayback_Task(void);
+static void AudioPlayback_Stop(void);
+static HAL_StatusTypeDef AudioOutput_Apply(ES8388_HandleTypeDef *dev);
+static const char *AudioOutput_Name(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -215,6 +242,289 @@ static uint8_t ES8388_IsPlaybackConfigActive(
                    probe->reg02 == 0xF3 && probe->reg04 == 0x30 &&
                    probe->reg08 == 0x00);
 }
+
+static uint16_t ReadLe16(const uint8_t *src) {
+  return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
+}
+
+static uint32_t ReadLe32(const uint8_t *src) {
+  return (uint32_t)((uint32_t)src[0] | ((uint32_t)src[1] << 8) |
+                    ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24));
+}
+
+static HAL_StatusTypeDef AudioPlayback_ConfigureI2S(uint32_t sampleRate) {
+  uint32_t audioFreq;
+
+  if (sampleRate == 44100U) {
+    audioFreq = I2S_AUDIOFREQ_44K;
+  } else if (sampleRate == 48000U) {
+    audioFreq = I2S_AUDIOFREQ_48K;
+  } else {
+    return HAL_ERROR;
+  }
+
+  if (hi2s2.Init.AudioFreq == audioFreq && hi2s2.State == HAL_I2S_STATE_READY) {
+    return HAL_OK;
+  }
+
+  (void)HAL_I2S_DMAStop(&hi2s2);
+  (void)HAL_I2S_DeInit(&hi2s2);
+  hi2s2.Init.AudioFreq = audioFreq;
+  return HAL_I2S_Init(&hi2s2);
+}
+
+static int WavPlayback_ParseHeader(FIL *file, WavPlaybackContext_t *ctx) {
+  UINT bytesRead = 0;
+  uint8_t header[12];
+  uint8_t chunkHeader[8];
+  uint16_t audioFormat = 0;
+  uint16_t channels = 0;
+  uint16_t bitsPerSample = 0;
+  uint8_t fmtFound = 0;
+  uint8_t dataFound = 0;
+
+  if (f_lseek(file, 0) != FR_OK) {
+    return -1;
+  }
+
+  if (f_read(file, header, sizeof(header), &bytesRead) != FR_OK ||
+      bytesRead != sizeof(header)) {
+    return -2;
+  }
+
+  if (memcmp(header, "RIFF", 4) != 0 || memcmp(&header[8], "WAVE", 4) != 0) {
+    return -3;
+  }
+
+  while ((fmtFound == 0U) || (dataFound == 0U)) {
+    uint32_t chunkSize;
+    FSIZE_t nextOffset;
+
+    if (f_read(file, chunkHeader, sizeof(chunkHeader), &bytesRead) != FR_OK ||
+        bytesRead != sizeof(chunkHeader)) {
+      return -4;
+    }
+
+    chunkSize = ReadLe32(&chunkHeader[4]);
+    nextOffset = f_tell(file) + chunkSize + (chunkSize & 1U);
+
+    if (memcmp(chunkHeader, "fmt ", 4) == 0) {
+      uint8_t fmtBuf[40];
+
+      if (chunkSize < 16U || chunkSize > sizeof(fmtBuf)) {
+        return -5;
+      }
+
+      if (f_read(file, fmtBuf, chunkSize, &bytesRead) != FR_OK ||
+          bytesRead != chunkSize) {
+        return -6;
+      }
+
+      audioFormat = ReadLe16(&fmtBuf[0]);
+      channels = ReadLe16(&fmtBuf[2]);
+      ctx->sampleRate = ReadLe32(&fmtBuf[4]);
+      bitsPerSample = ReadLe16(&fmtBuf[14]);
+      fmtFound = 1U;
+    } else if (memcmp(chunkHeader, "data", 4) == 0) {
+      ctx->dataOffset = (uint32_t)f_tell(file);
+      ctx->dataSize = chunkSize;
+      ctx->dataRemaining = chunkSize;
+      dataFound = 1U;
+      break;
+    }
+
+    if (f_lseek(file, nextOffset) != FR_OK) {
+      return -7;
+    }
+  }
+
+  if (fmtFound == 0U || dataFound == 0U) {
+    return -8;
+  }
+
+  if (audioFormat != 1U || channels != 2U || bitsPerSample != 16U) {
+    return -9;
+  }
+
+  if (ctx->sampleRate != 44100U && ctx->sampleRate != 48000U) {
+    return -10;
+  }
+
+  if (f_lseek(file, ctx->dataOffset) != FR_OK) {
+    return -11;
+  }
+
+  return 0;
+}
+
+static HAL_StatusTypeDef WavPlayback_RefillHalf(WavPlaybackContext_t *ctx,
+                                                uint32_t halfIndex) {
+  UINT bytesRead = 0;
+  uint8_t *dstBytes;
+  uint32_t bytesToFill = WAV_DMA_HALFWORDS_PER_HALF * sizeof(uint16_t);
+  uint32_t filledBytes = 0;
+
+  if (ctx == NULL || ctx->isOpen == 0U) {
+    return HAL_ERROR;
+  }
+
+  dstBytes = (uint8_t *)&ctx->dmaBuffer[halfIndex * WAV_DMA_HALFWORDS_PER_HALF];
+  memset(dstBytes, 0, bytesToFill);
+
+  while (filledBytes < bytesToFill) {
+    uint32_t chunkRequest = bytesToFill - filledBytes;
+    FRESULT fr;
+
+    if (ctx->dataRemaining == 0U) {
+      if (ctx->loopEnabled == 0U) {
+        break;
+      }
+
+      fr = f_lseek(&ctx->file, ctx->dataOffset);
+      if (fr != FR_OK) {
+        return HAL_ERROR;
+      }
+      ctx->dataRemaining = ctx->dataSize;
+    }
+
+    if (chunkRequest > ctx->dataRemaining) {
+      chunkRequest = ctx->dataRemaining;
+    }
+
+    fr = f_read(&ctx->file, &dstBytes[filledBytes], chunkRequest, &bytesRead);
+    if (fr != FR_OK) {
+      return HAL_ERROR;
+    }
+
+    filledBytes += bytesRead;
+    ctx->dataRemaining -= bytesRead;
+
+    if (bytesRead == 0U) {
+      break;
+    }
+  }
+
+  return HAL_OK;
+}
+
+static void AudioPlayback_Stop(void) {
+  if (gWavPlayback.isPlaying != 0U) {
+    (void)HAL_I2S_DMAStop(&hi2s2);
+  }
+
+  if (gWavPlayback.isOpen != 0U) {
+    (void)f_close(&gWavPlayback.file);
+  }
+
+  memset(&gWavPlayback, 0, sizeof(gWavPlayback));
+}
+
+static HAL_StatusTypeDef AudioPlayback_StartWav(const char *path) {
+  FRESULT fr;
+  int parseRet;
+
+  AudioPlayback_Stop();
+  memset(&gWavPlayback, 0, sizeof(gWavPlayback));
+  gWavPlayback.loopEnabled = 1U;
+
+  fr = f_open(&gWavPlayback.file, path, FA_READ);
+  if (fr != FR_OK) {
+    printf("WAV open failed: %d\r\n", fr);
+    return HAL_ERROR;
+  }
+  gWavPlayback.isOpen = 1U;
+
+  parseRet = WavPlayback_ParseHeader(&gWavPlayback.file, &gWavPlayback);
+  if (parseRet != 0) {
+    printf("WAV parse failed: %d\r\n", parseRet);
+    AudioPlayback_Stop();
+    return HAL_ERROR;
+  }
+
+  if (AudioPlayback_ConfigureI2S(gWavPlayback.sampleRate) != HAL_OK) {
+    printf("I2S reconfig failed for sampleRate=%lu\r\n",
+           (unsigned long)gWavPlayback.sampleRate);
+    AudioPlayback_Stop();
+    return HAL_ERROR;
+  }
+
+  if (WavPlayback_RefillHalf(&gWavPlayback, 0U) != HAL_OK ||
+      WavPlayback_RefillHalf(&gWavPlayback, 1U) != HAL_OK) {
+    printf("WAV initial buffer fill failed\r\n");
+    AudioPlayback_Stop();
+    return HAL_ERROR;
+  }
+
+  if (HAL_I2S_Transmit_DMA(&hi2s2, gWavPlayback.dmaBuffer,
+                           WAV_DMA_BUFFER_HALFWORDS) != HAL_OK) {
+    printf("WAV DMA start failed: i2s=0x%08lX dma=0x%08lX\r\n",
+           (unsigned long)HAL_I2S_GetError(&hi2s2),
+           (unsigned long)hdma_spi2_tx.ErrorCode);
+    AudioPlayback_Stop();
+    return HAL_ERROR;
+  }
+
+  gWavPlayback.isPlaying = 1U;
+  printf("WAV playback started: %s, %lu Hz\r\n", path,
+         (unsigned long)gWavPlayback.sampleRate);
+  return HAL_OK;
+}
+
+static void AudioPlayback_Task(void) {
+  if (gWavPlayback.isPlaying == 0U) {
+    return;
+  }
+
+  if (gWavPlayback.pendingHalf0 != 0U) {
+    gWavPlayback.pendingHalf0 = 0U;
+    if (WavPlayback_RefillHalf(&gWavPlayback, 0U) != HAL_OK) {
+      printf("WAV refill half0 failed\r\n");
+      AudioPlayback_Stop();
+    }
+  }
+
+  if (gWavPlayback.pendingHalf1 != 0U) {
+    gWavPlayback.pendingHalf1 = 0U;
+    if (WavPlayback_RefillHalf(&gWavPlayback, 1U) != HAL_OK) {
+      printf("WAV refill half1 failed\r\n");
+      AudioPlayback_Stop();
+    }
+  }
+}
+
+static HAL_StatusTypeDef AudioOutput_Apply(ES8388_HandleTypeDef *dev) {
+  if (dev == NULL) {
+    return HAL_ERROR;
+  }
+
+  if (ES8388_AddaConfig(dev, 1, 0) != HAL_OK) {
+    return HAL_ERROR;
+  }
+
+#if AUDIO_OUTPUT_TARGET == AUDIO_OUTPUT_HEADPHONE
+  if (ES8388_OutputConfig(dev, 1, 1) != HAL_OK) {
+    return HAL_ERROR;
+  }
+  return ES8388_SetHeadphoneVolume(dev, 25);
+#elif AUDIO_OUTPUT_TARGET == AUDIO_OUTPUT_SPEAKER
+  if (ES8388_OutputConfig(dev, 0, 1) != HAL_OK) {
+    return HAL_ERROR;
+  }
+  return ES8388_SetSpeakerVolume(dev, 30);
+#else
+#error Unsupported AUDIO_OUTPUT_TARGET
+#endif
+}
+
+static const char *AudioOutput_Name(void) {
+#if AUDIO_OUTPUT_TARGET == AUDIO_OUTPUT_HEADPHONE
+  return "headphone";
+#elif AUDIO_OUTPUT_TARGET == AUDIO_OUTPUT_SPEAKER
+  return "speaker";
+#else
+  return "unknown";
+#endif
+}
 /* USER CODE END 0 */
 
 /**
@@ -304,7 +614,18 @@ int main(void)
       if (ES8388_IsPlaybackConfigActive(&es8388Probe)) {
         printf("ES8388 playback config already active, skip re-init\r\n");
 
-        if (AudioTestTone_Start() == HAL_OK) {
+        if (AudioOutput_Apply(&hEs8388) != HAL_OK) {
+          printf(
+              "ES8388 %s path setup failed, reg=0x%02X value=0x%02X "
+              "halError=0x%08lX\r\n",
+              AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
+              ES8388_GetLastValue(&hEs8388),
+              ES8388_GetLastError(&hEs8388));
+        }
+
+        if (AudioPlayback_StartWav("0:/output.wav") == HAL_OK) {
+          printf("SD WAV playback active\r\n");
+        } else if (AudioTestTone_Start() == HAL_OK) {
           printf("I2S DMA test tone started on headphone output\r\n");
         } else {
           printf("I2S DMA test tone start failed: i2s=0x%08lX dma=0x%08lX\r\n",
@@ -313,12 +634,12 @@ int main(void)
         }
       } else {
         if (ES8388_InitForPlaybackHeadphone(&hEs8388) == HAL_OK) {
-          if (ES8388_AddaConfig(&hEs8388, 1, 0) == HAL_OK &&
-              ES8388_OutputConfig(&hEs8388, 1, 1) == HAL_OK &&
-              ES8388_SetHeadphoneVolume(&hEs8388, 25) == HAL_OK) {
-            printf("ES8388 headphone playback init OK\r\n");
+          if (AudioOutput_Apply(&hEs8388) == HAL_OK) {
+            printf("ES8388 %s playback init OK\r\n", AudioOutput_Name());
 
-            if (AudioTestTone_Start() == HAL_OK) {
+            if (AudioPlayback_StartWav("0:/output.wav") == HAL_OK) {
+              printf("SD WAV playback active\r\n");
+            } else if (AudioTestTone_Start() == HAL_OK) {
               printf("I2S DMA test tone started on headphone output\r\n");
             } else {
               printf(
@@ -328,9 +649,10 @@ int main(void)
             }
           } else {
             printf(
-                "ES8388 post-init audio path setup failed, reg=0x%02X "
+                "ES8388 post-init %s path setup failed, reg=0x%02X "
                 "value=0x%02X halError=0x%08lX\r\n",
-                ES8388_GetLastReg(&hEs8388), ES8388_GetLastValue(&hEs8388),
+                AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
+                ES8388_GetLastValue(&hEs8388),
                 ES8388_GetLastError(&hEs8388));
           }
         } else {
@@ -541,7 +863,8 @@ int main(void)
     }
 
     lv_timer_handler();
-    HAL_Delay(5);
+    AudioPlayback_Task();
+    HAL_Delay(1);
   }
   /* USER CODE END 3 */
 }
@@ -1099,6 +1422,18 @@ static void CreateTestFile(void) {
   }
 
   printf("File created successfully\r\n");
+}
+
+void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
+  if (hi2s == &hi2s2 && gWavPlayback.isPlaying != 0U) {
+    gWavPlayback.pendingHalf0 = 1U;
+  }
+}
+
+void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
+  if (hi2s == &hi2s2 && gWavPlayback.isPlaying != 0U) {
+    gWavPlayback.pendingHalf1 = 1U;
+  }
 }
 /* USER CODE END 4 */
 
