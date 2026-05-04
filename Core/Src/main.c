@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "audio_player.h"
 #include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -61,10 +62,12 @@
 #define AUDIO_FILE_OBJ_OFFSET \
   (JPG_DECODE_BUF_OFFSET + JPG_DECODE_BUF_SIZE_BYTES)
 #define AUDIO_FILE_OBJ ((FIL *)(EXT_SRAM_BASE + AUDIO_FILE_OBJ_OFFSET))
+#define AUDIO_TRACK_MAX 8U
+#define AUDIO_TRACK_PATH_MAX 64U
 
 #define AUDIO_OUTPUT_HEADPHONE 0U
 #define AUDIO_OUTPUT_SPEAKER 1U
-#define AUDIO_OUTPUT_TARGET AUDIO_OUTPUT_HEADPHONE
+#define AUDIO_OUTPUT_TARGET AUDIO_OUTPUT_SPEAKER
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -109,6 +112,10 @@ static uint32_t gLastPhotoScanTick = 0;
 ES8388_HandleTypeDef hEs8388;
 ES8388_ProbeResultTypeDef es8388Probe;
 static int16_t gAudioTestTone[AUDIO_TEST_TONE_WORDS];
+static uint32_t gAudioTrackCount = 0;
+static int32_t gCurrentAudioTrackIndex = -1;
+static AudioPlayerStateChangedCallback_t gAudioStateChangedCallback;
+static char gAudioTrackPaths[AUDIO_TRACK_MAX][AUDIO_TRACK_PATH_MAX];
 
 typedef struct {
   FIL *file;
@@ -152,6 +159,12 @@ static void AudioPlayback_Task(void);
 static void AudioPlayback_Stop(void);
 static HAL_StatusTypeDef AudioOutput_Apply(ES8388_HandleTypeDef *dev);
 static const char *AudioOutput_Name(void);
+static char *AudioTrackPathSlot(uint32_t index);
+static const char *AudioTrackFileName(const char *path);
+static int AudioTrack_IsWavFile(const char *fileName);
+static void AudioPlayer_NotifyStateChanged(void);
+static int AudioTrack_AddDir(const char *dirPath);
+static void AudioTrack_Sort(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -484,6 +497,7 @@ static void AudioPlayback_Task(void) {
     if (WavPlayback_RefillHalf(&gWavPlayback, 0U) != HAL_OK) {
       printf("WAV refill half0 failed\r\n");
       AudioPlayback_Stop();
+      AudioPlayer_NotifyStateChanged();
     }
   }
 
@@ -492,6 +506,7 @@ static void AudioPlayback_Task(void) {
     if (WavPlayback_RefillHalf(&gWavPlayback, 1U) != HAL_OK) {
       printf("WAV refill half1 failed\r\n");
       AudioPlayback_Stop();
+      AudioPlayer_NotifyStateChanged();
     }
   }
 }
@@ -528,6 +543,241 @@ static const char *AudioOutput_Name(void) {
 #else
   return "unknown";
 #endif
+}
+
+static char *AudioTrackPathSlot(uint32_t index) {
+  return gAudioTrackPaths[index];
+}
+
+static const char *AudioTrackFileName(const char *path) {
+  const char *slash;
+
+  if (path == NULL) {
+    return "";
+  }
+
+  slash = strrchr(path, '/');
+  if (slash == NULL) {
+    return path;
+  }
+
+  return slash + 1;
+}
+
+static int AudioTrack_IsWavFile(const char *fileName) {
+  const char *ext;
+
+  if (fileName == NULL) {
+    return 0;
+  }
+
+  ext = strrchr(fileName, '.');
+  if (ext == NULL) {
+    return 0;
+  }
+
+  return ((ext[0] == '.') &&
+          ((ext[1] == 'w') || (ext[1] == 'W')) &&
+          ((ext[2] == 'a') || (ext[2] == 'A')) &&
+          ((ext[3] == 'v') || (ext[3] == 'V')) && (ext[4] == '\0'));
+}
+
+static void AudioPlayer_NotifyStateChanged(void) {
+  if (gAudioStateChangedCallback != NULL) {
+    gAudioStateChangedCallback();
+  }
+}
+
+static int AudioTrack_AddDir(const char *dirPath) {
+  DIR dir;
+  FILINFO fno;
+  FRESULT res;
+
+  if (dirPath == NULL) {
+    return -1;
+  }
+
+  res = f_opendir(&dir, dirPath);
+  if (res != FR_OK) {
+    return -2;
+  }
+
+  while (gAudioTrackCount < AUDIO_TRACK_MAX) {
+    int len;
+
+    res = f_readdir(&dir, &fno);
+    if (res != FR_OK) {
+      f_closedir(&dir);
+      return -3;
+    }
+
+    if (fno.fname[0] == '\0') {
+      break;
+    }
+
+    if ((fno.fattrib & AM_DIR) != 0U || !AudioTrack_IsWavFile(fno.fname)) {
+      continue;
+    }
+
+    len = snprintf(AudioTrackPathSlot(gAudioTrackCount), AUDIO_TRACK_PATH_MAX,
+                   "%s%s", dirPath, fno.fname);
+    if (len < 0 || len >= (int)AUDIO_TRACK_PATH_MAX) {
+      continue;
+    }
+
+    gAudioTrackCount++;
+  }
+
+  f_closedir(&dir);
+  return 0;
+}
+
+static void AudioTrack_Sort(void) {
+  uint32_t i;
+  uint32_t j;
+
+  for (i = 0; i + 1U < gAudioTrackCount; i++) {
+    for (j = i + 1U; j < gAudioTrackCount; j++) {
+      if (strcmp(AudioTrackPathSlot(i), AudioTrackPathSlot(j)) > 0) {
+        char tmp[AUDIO_TRACK_PATH_MAX];
+
+        snprintf(tmp, sizeof(tmp), "%s", AudioTrackPathSlot(i));
+        snprintf(AudioTrackPathSlot(i), AUDIO_TRACK_PATH_MAX, "%s",
+                 AudioTrackPathSlot(j));
+        snprintf(AudioTrackPathSlot(j), AUDIO_TRACK_PATH_MAX, "%s", tmp);
+      }
+    }
+  }
+}
+
+void AudioPlayer_ScanTracks(void) {
+  char currentPath[AUDIO_TRACK_PATH_MAX] = {0};
+  uint32_t i;
+
+  if (gCurrentAudioTrackIndex >= 0 &&
+      (uint32_t)gCurrentAudioTrackIndex < gAudioTrackCount) {
+    snprintf(currentPath, sizeof(currentPath), "%s",
+             AudioTrackPathSlot((uint32_t)gCurrentAudioTrackIndex));
+  }
+
+  for (i = 0; i < AUDIO_TRACK_MAX; i++) {
+    AudioTrackPathSlot(i)[0] = '\0';
+  }
+
+  gAudioTrackCount = 0;
+  (void)AudioTrack_AddDir("0:/");
+  (void)AudioTrack_AddDir("0:/music/");
+  AudioTrack_Sort();
+
+  if (gAudioTrackCount == 0U) {
+    gCurrentAudioTrackIndex = -1;
+    AudioPlayer_NotifyStateChanged();
+    return;
+  }
+
+  gCurrentAudioTrackIndex = 0;
+  if (currentPath[0] != '\0') {
+    for (i = 0; i < gAudioTrackCount; i++) {
+      if (strcmp(currentPath, AudioTrackPathSlot(i)) == 0) {
+        gCurrentAudioTrackIndex = (int32_t)i;
+        break;
+      }
+    }
+  }
+
+  AudioPlayer_NotifyStateChanged();
+}
+
+uint32_t AudioPlayer_GetTrackCount(void) { return gAudioTrackCount; }
+
+int32_t AudioPlayer_GetCurrentTrackIndex(void) { return gCurrentAudioTrackIndex; }
+
+uint8_t AudioPlayer_IsPlaying(void) { return gWavPlayback.isPlaying; }
+
+int AudioPlayer_GetTrackName(uint32_t index, char *buffer, uint32_t bufferSize) {
+  if (buffer == NULL || bufferSize == 0U) {
+    return -1;
+  }
+
+  buffer[0] = '\0';
+  if (index >= gAudioTrackCount) {
+    return -2;
+  }
+
+  snprintf(buffer, bufferSize, "%s",
+           AudioTrackFileName(AudioTrackPathSlot(index)));
+  return 0;
+}
+
+HAL_StatusTypeDef AudioPlayer_PlayTrack(uint32_t index) {
+  HAL_StatusTypeDef ret;
+
+  if (index >= gAudioTrackCount) {
+    return HAL_ERROR;
+  }
+
+  ret = AudioPlayback_StartWav(AudioTrackPathSlot(index));
+  if (ret == HAL_OK) {
+    gCurrentAudioTrackIndex = (int32_t)index;
+    AudioPlayer_NotifyStateChanged();
+  }
+
+  return ret;
+}
+
+HAL_StatusTypeDef AudioPlayer_PlayCurrent(void) {
+  if (gAudioTrackCount == 0U) {
+    return HAL_ERROR;
+  }
+
+  if (gCurrentAudioTrackIndex < 0 ||
+      (uint32_t)gCurrentAudioTrackIndex >= gAudioTrackCount) {
+    gCurrentAudioTrackIndex = 0;
+  }
+
+  return AudioPlayer_PlayTrack((uint32_t)gCurrentAudioTrackIndex);
+}
+
+HAL_StatusTypeDef AudioPlayer_PlayNextTrack(void) {
+  uint32_t nextIndex;
+
+  if (gAudioTrackCount == 0U) {
+    return HAL_ERROR;
+  }
+
+  if (gCurrentAudioTrackIndex < 0) {
+    nextIndex = 0U;
+  } else {
+    nextIndex = ((uint32_t)gCurrentAudioTrackIndex + 1U) % gAudioTrackCount;
+  }
+
+  return AudioPlayer_PlayTrack(nextIndex);
+}
+
+HAL_StatusTypeDef AudioPlayer_PlayPrevTrack(void) {
+  uint32_t prevIndex;
+
+  if (gAudioTrackCount == 0U) {
+    return HAL_ERROR;
+  }
+
+  if (gCurrentAudioTrackIndex <= 0) {
+    prevIndex = gAudioTrackCount - 1U;
+  } else {
+    prevIndex = (uint32_t)gCurrentAudioTrackIndex - 1U;
+  }
+
+  return AudioPlayer_PlayTrack(prevIndex);
+}
+
+void AudioPlayer_StopPlayback(void) {
+  AudioPlayback_Stop();
+  AudioPlayer_NotifyStateChanged();
+}
+
+void AudioPlayer_SetStateChangedCallback(
+    AudioPlayerStateChangedCallback_t callback) {
+  gAudioStateChangedCallback = callback;
 }
 /* USER CODE END 0 */
 
@@ -590,6 +840,10 @@ int main(void)
     } else {
       printf("Photo scan failed\r\n");
     }
+
+    AudioPlayer_ScanTracks();
+    printf("Audio track scan done, count=%lu\r\n",
+           (unsigned long)AudioPlayer_GetTrackCount());
   } else {
     printf("f_mount failed: %d\r\n", res);
   }
@@ -627,7 +881,7 @@ int main(void)
               ES8388_GetLastError(&hEs8388));
         }
 
-        if (AudioPlayback_StartWav("0:/output.wav") == HAL_OK) {
+        if (AudioPlayer_PlayCurrent() == HAL_OK) {
           printf("SD WAV playback active\r\n");
         } else if (AudioTestTone_Start() == HAL_OK) {
           printf("I2S DMA test tone started on headphone output\r\n");
@@ -641,7 +895,7 @@ int main(void)
           if (AudioOutput_Apply(&hEs8388) == HAL_OK) {
             printf("ES8388 %s playback init OK\r\n", AudioOutput_Name());
 
-            if (AudioPlayback_StartWav("0:/output.wav") == HAL_OK) {
+            if (AudioPlayer_PlayCurrent() == HAL_OK) {
               printf("SD WAV playback active\r\n");
             } else if (AudioTestTone_Start() == HAL_OK) {
               printf("I2S DMA test tone started on headphone output\r\n");

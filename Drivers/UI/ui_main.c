@@ -1,3 +1,4 @@
+#include "audio_player.h"
 #include "ui_main.h"
 #include "album.h"
 #include "lvgl.h"
@@ -34,11 +35,17 @@
 #define TXT_PLANT "\xE6\xA4\x8D\xE7\x89\xA9"
 #define TXT_PERSON "\xE4\xBA\xBA\xE7\x89\xA9"
 #define TXT_ANIMAL "\xE5\x8A\xA8\xE7\x89\xA9"
+#define TXT_MUSIC "\xE9\x9F\xB3\xE4\xB9\x90"
+#define TXT_PLAY "\xE6\x92\xAD\xE6\x94\xBE"
+#define TXT_NO_WAV "\xE6\x9C\xAA\xE6\x89\xBE\xE5\x88\xB0WAV"
+#define TXT_PREV_TRACK "\xE4\xB8\x8A\xE4\xB8\x80\xE9\xA6\x96"
+#define TXT_NEXT_TRACK "\xE4\xB8\x8B\xE4\xB8\x80\xE9\xA6\x96"
 
 static lv_obj_t *lockScreen;
 static lv_obj_t *mainScreen;
 static lv_obj_t *categoryScreen;
 static lv_obj_t *searchScreen;
+static lv_obj_t *musicScreen;
 static lv_obj_t *photoImg;
 static lv_obj_t *photoInfoLabel;
 static lv_obj_t *autoplayLabel;
@@ -47,6 +54,9 @@ static lv_obj_t *passwordStatusLabel;
 static lv_obj_t *searchInputLabel;
 static lv_obj_t *searchStatusLabel;
 static lv_obj_t *searchResultContainer;
+static lv_obj_t *musicNowPlayingLabel;
+static lv_obj_t *musicPlayLabel;
+static lv_obj_t *musicListContainer;
 static lv_timer_t *autoplayTimer;
 static char passwordInput[PASSWORD_MAX_LEN + 1U];
 static uint8_t passwordInputLen = 0;
@@ -62,6 +72,7 @@ typedef enum {
 } PasswordKey_t;
 
 static void AutoplayStop(void);
+static void MusicRefreshUi(void);
 
 static void ApplyUIFont(lv_obj_t *obj) {
   const lv_font_t *font = UI_FontZhGet();
@@ -268,6 +279,45 @@ static void BackBtnEvent(lv_event_t *e) {
   lv_screen_load(mainScreen);
 }
 
+static void MusicStateChangedCallback(void) { MusicRefreshUi(); }
+
+static void MusicBackBtnEvent(lv_event_t *e) {
+  (void)e;
+  lv_screen_load(categoryScreen);
+}
+
+static void MusicTrackEvent(lv_event_t *e) {
+  uint32_t trackIndex = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+  (void)AudioPlayer_PlayTrack(trackIndex);
+}
+
+static void MusicPrevBtnEvent(lv_event_t *e) {
+  (void)e;
+  (void)AudioPlayer_PlayPrevTrack();
+}
+
+static void MusicPlayBtnEvent(lv_event_t *e) {
+  (void)e;
+
+  if (AudioPlayer_IsPlaying() != 0U) {
+    AudioPlayer_StopPlayback();
+  } else {
+    (void)AudioPlayer_PlayCurrent();
+  }
+}
+
+static void MusicNextBtnEvent(lv_event_t *e) {
+  (void)e;
+  (void)AudioPlayer_PlayNextTrack();
+}
+
+static void MusicBtnEvent(lv_event_t *e) {
+  (void)e;
+  AudioPlayer_ScanTracks();
+  MusicRefreshUi();
+  lv_screen_load(musicScreen);
+}
+
 static lv_obj_t *CreateButton(lv_obj_t *parent, const char *text, int16_t w,
                               int16_t h) {
   lv_obj_t *btn;
@@ -419,6 +469,73 @@ static void AddSearchKeyButton(const char *text, char key, int16_t x,
   lv_obj_set_pos(btn, x, y);
   lv_obj_add_event_cb(btn, SearchKeyEvent, LV_EVENT_CLICKED,
                       (void *)(uintptr_t)key);
+}
+
+static void MusicRefreshUi(void) {
+  uint32_t count;
+  int32_t currentIndex;
+  uint8_t isPlaying;
+  char currentName[64];
+  if (musicNowPlayingLabel == NULL || musicListContainer == NULL ||
+      musicPlayLabel == NULL) {
+    return;
+  }
+
+  count = AudioPlayer_GetTrackCount();
+  currentIndex = AudioPlayer_GetCurrentTrackIndex();
+  isPlaying = AudioPlayer_IsPlaying();
+
+  if (isPlaying != 0U) {
+    lv_label_set_text(musicPlayLabel, TXT_STOP);
+  } else {
+    lv_label_set_text(musicPlayLabel, TXT_PLAY);
+  }
+
+  if (count == 0U) {
+    lv_label_set_text(musicNowPlayingLabel, TXT_NO_WAV);
+    lv_obj_clean(musicListContainer);
+    return;
+  }
+
+  if (currentIndex >= 0 &&
+      AudioPlayer_GetTrackName((uint32_t)currentIndex, currentName,
+                               sizeof(currentName)) == 0) {
+    lv_label_set_text(musicNowPlayingLabel, currentName);
+  } else {
+    lv_label_set_text(musicNowPlayingLabel, "");
+  }
+
+  lv_obj_clean(musicListContainer);
+
+  for (uint32_t i = 0; i < count; i++) {
+    lv_obj_t *btn;
+    lv_obj_t *label;
+    char name[64];
+
+    if (AudioPlayer_GetTrackName(i, name, sizeof(name)) != 0) {
+      snprintf(name, sizeof(name), "Track %lu", (unsigned long)(i + 1U));
+    }
+
+    btn = lv_button_create(musicListContainer);
+    lv_obj_set_width(btn, 420);
+    lv_obj_set_height(btn, 50);
+    lv_obj_set_style_radius(btn, 8, 0);
+
+    if ((int32_t)i == currentIndex) {
+      lv_obj_set_style_bg_color(btn,
+                                isPlaying ? lv_color_hex(0x2E7D32)
+                                          : lv_color_hex(0x444444),
+                                0);
+    }
+
+    lv_obj_add_event_cb(btn, MusicTrackEvent, LV_EVENT_CLICKED,
+                        (void *)(uintptr_t)i);
+
+    label = lv_label_create(btn);
+    lv_label_set_text(label, name);
+    ApplyUIFont(label);
+    lv_obj_center(label);
+  }
 }
 
 static void CreateLockScreen(void) {
@@ -587,6 +704,67 @@ static void CreateCategoryScreen(void) {
   AddCategoryButton(TXT_PLANT, AlbumCategoryPlant, 370);
   AddCategoryButton(TXT_PERSON, AlbumCategoryPerson, 460);
   AddCategoryButton(TXT_ANIMAL, AlbumCategoryAnimal, 550);
+
+  lv_obj_t *musicBtn = CreateButton(categoryScreen, TXT_MUSIC, 260, 70);
+  lv_obj_align(musicBtn, LV_ALIGN_TOP_MID, 0, 640);
+  lv_obj_add_event_cb(musicBtn, MusicBtnEvent, LV_EVENT_CLICKED, NULL);
+}
+
+static void CreateMusicScreen(void) {
+  musicScreen = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(musicScreen, lv_color_hex(0x111111), 0);
+  lv_obj_set_style_bg_opa(musicScreen, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(musicScreen, 0, 0);
+
+  lv_obj_t *titleBar = lv_obj_create(musicScreen);
+  lv_obj_set_size(titleBar, 480, 60);
+  lv_obj_align(titleBar, LV_ALIGN_TOP_MID, 0, 0);
+  lv_obj_set_style_radius(titleBar, 0, 0);
+  lv_obj_set_style_bg_color(titleBar, lv_color_hex(0x222222), 0);
+  lv_obj_set_style_border_width(titleBar, 0, 0);
+  lv_obj_set_style_pad_all(titleBar, 0, 0);
+
+  lv_obj_t *title = lv_label_create(titleBar);
+  lv_label_set_text(title, TXT_MUSIC);
+  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_center(title);
+
+  lv_obj_t *backBtn = CreateButton(musicScreen, TXT_BACK, 80, 40);
+  lv_obj_align(backBtn, LV_ALIGN_TOP_LEFT, 10, 10);
+  lv_obj_add_event_cb(backBtn, MusicBackBtnEvent, LV_EVENT_CLICKED, NULL);
+
+  musicNowPlayingLabel = lv_label_create(musicScreen);
+  lv_label_set_text(musicNowPlayingLabel, TXT_NO_WAV);
+  lv_label_set_long_mode(musicNowPlayingLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_width(musicNowPlayingLabel, 420);
+  lv_obj_align(musicNowPlayingLabel, LV_ALIGN_TOP_MID, 0, 84);
+  lv_obj_set_style_text_color(musicNowPlayingLabel, lv_color_white(), 0);
+
+  lv_obj_t *prevBtn = CreateButton(musicScreen, TXT_PREV_TRACK, 100, 46);
+  lv_obj_align(prevBtn, LV_ALIGN_TOP_LEFT, 20, 128);
+  lv_obj_add_event_cb(prevBtn, MusicPrevBtnEvent, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t *playBtn = CreateButton(musicScreen, TXT_PLAY, 100, 46);
+  lv_obj_align(playBtn, LV_ALIGN_TOP_MID, 0, 128);
+  lv_obj_add_event_cb(playBtn, MusicPlayBtnEvent, LV_EVENT_CLICKED, NULL);
+  musicPlayLabel = lv_obj_get_child(playBtn, 0);
+
+  lv_obj_t *nextBtn = CreateButton(musicScreen, TXT_NEXT_TRACK, 100, 46);
+  lv_obj_align(nextBtn, LV_ALIGN_TOP_RIGHT, -20, 128);
+  lv_obj_add_event_cb(nextBtn, MusicNextBtnEvent, LV_EVENT_CLICKED, NULL);
+
+  musicListContainer = lv_obj_create(musicScreen);
+  lv_obj_set_size(musicListContainer, 440, 560);
+  lv_obj_align(musicListContainer, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_set_style_bg_color(musicListContainer, lv_color_hex(0x111111), 0);
+  lv_obj_set_style_border_color(musicListContainer, lv_color_hex(0x666666), 0);
+  lv_obj_set_style_border_width(musicListContainer, 2, 0);
+  lv_obj_set_style_radius(musicListContainer, 8, 0);
+  lv_obj_set_scroll_dir(musicListContainer, LV_DIR_VER);
+  lv_obj_set_layout(musicListContainer, LV_LAYOUT_FLEX);
+  lv_obj_set_flex_flow(musicListContainer, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_all(musicListContainer, 8, 0);
+  lv_obj_set_style_pad_row(musicListContainer, 8, 0);
 }
 
 static void CreateSearchScreen(void) {
@@ -668,13 +846,17 @@ void ui_main_init(void) {
   CreateLockScreen();
   CreateMainScreen();
   CreateCategoryScreen();
+  CreateMusicScreen();
   CreateSearchScreen();
   ApplyUIFontTree(lockScreen);
   ApplyUIFontTree(mainScreen);
   ApplyUIFontTree(categoryScreen);
+  ApplyUIFontTree(musicScreen);
   ApplyUIFontTree(searchScreen);
   PhotoView_BindImageObject(photoImg);
   Album_SetPhotoChangedCallback(PhotoChangedCallback);
+  AudioPlayer_SetStateChangedCallback(MusicStateChangedCallback);
+  MusicRefreshUi();
   UpdatePhotoInfoLabel(gCurrentPhotoIndex);
   LockGallery();
 }
