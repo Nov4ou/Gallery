@@ -42,11 +42,31 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
 )
 
+# Collect LVGL sources recursively
+file(GLOB_RECURSE LVGL_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/Middlewares/LVGL/lvgl/src/*.c
+)
+
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     Drivers/LCD/lcd.c
     Drivers/BMP/bmp.c
+    Drivers/SOFT_I2C/soft_i2c.c
+    Drivers/TOUCH/gt911.c
+    Drivers/LV_PORT_DISP/lv_port_disp.c
+    Drivers/LV_PORT_INDEV/lv_port_indev.c
+    Drivers/UI/ui_main.c
+    Drivers/UI/photo_view.c
+    Drivers/UI/ui_font_zh.c
+    ${LVGL_SOURCES}
+    Drivers/JPEG/jpeg_viewer.c
+    Middlewares/TJpgDec/tjpgd.c
+    Drivers/IMAGE/image_scale.c
+    Drivers/APP/album/album.c
+    Drivers/APP/upload/image_upload.c
+    Drivers/WIFI/mw8266.c
+    Drivers/ES8388/es8388.c
 )
 
 # Add include paths
@@ -54,6 +74,20 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     Drivers/LCD
     Drivers/BMP
+    Drivers/SOFT_I2C
+    Drivers/TOUCH
+    Middlewares/LVGL/lvgl
+    Middlewares/LVGL
+    Drivers/LV_PORT_DISP
+    Drivers/LV_PORT_INDEV
+    Drivers/UI
+    Drivers/JPEG
+    Middlewares/TJpgDec
+    Drivers/IMAGE
+    Drivers/APP/album
+    Drivers/APP/upload
+    Drivers/WIFI
+    Drivers/ES8388
 )
 
 # Add project symbols (macros)
