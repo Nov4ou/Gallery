@@ -49,8 +49,6 @@ extern "C" {
 
 /* USER CODE END EM */
 
-void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
-
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
 
@@ -59,6 +57,13 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define LD3320_RST_Pin GPIO_PIN_4
+#define LD3320_RST_GPIO_Port GPIOE
+#define LD3320_CS_Pin GPIO_PIN_5
+#define LD3320_CS_GPIO_Port GPIOE
+#define LD3320_IRQ_Pin GPIO_PIN_6
+#define LD3320_IRQ_GPIO_Port GPIOE
+#define LD3320_IRQ_EXTI_IRQn EXTI9_5_IRQn
 #define GT911_RST_Pin GPIO_PIN_13
 #define GT911_RST_GPIO_Port GPIOC
 #define LED0_Pin GPIO_PIN_9

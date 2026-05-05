@@ -18,12 +18,21 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "audio_player.h"
+#include "dma.h"
 #include "fatfs.h"
+#include "i2c.h"
+#include "i2s.h"
+#include "sdio.h"
+#include "spi.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
+#include "fsmc.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "album.h"
+#include "audio_player.h"
 #include "bmp.h"
 #include "es8388.h"
 #include "gt911.h"
@@ -31,15 +40,16 @@
 #include "image_upload.h"
 #include "jpeg_viewer.h"
 #include "lcd.h"
+#include "ld3320.h"
 #include "lv_port_disp.h"
 #include "lv_port_indev.h"
 #include "lvgl.h"
 #include "mw8266.h"
 #include "photo_view.h"
 #include "stdint.h"
+#include "stm32f4xx_hal_i2s.h"
 #include "string.h"
 #include "ui_main.h"
-#include "stm32f4xx_hal_i2s.h"
 #include <stdio.h>
 
 /* USER CODE END Includes */
@@ -59,7 +69,7 @@
 #define AUDIO_TEST_TONE_WORDS (AUDIO_TEST_TONE_FRAMES * 2U)
 #define WAV_DMA_HALFWORDS_PER_HALF 512U
 #define WAV_DMA_BUFFER_HALFWORDS (WAV_DMA_HALFWORDS_PER_HALF * 2U)
-#define AUDIO_FILE_OBJ_OFFSET \
+#define AUDIO_FILE_OBJ_OFFSET                                                  \
   (JPG_DECODE_BUF_OFFSET + JPG_DECODE_BUF_SIZE_BYTES)
 #define AUDIO_FILE_OBJ ((FIL *)(EXT_SRAM_BASE + AUDIO_FILE_OBJ_OFFSET))
 #define AUDIO_TRACK_MAX 8U
@@ -68,6 +78,7 @@
 #define AUDIO_OUTPUT_HEADPHONE 0U
 #define AUDIO_OUTPUT_SPEAKER 1U
 #define AUDIO_OUTPUT_TARGET AUDIO_OUTPUT_SPEAKER
+#define LD3320_VOICE_TEST_ONLY 1U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -76,21 +87,6 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
-
-I2S_HandleTypeDef hi2s2;
-DMA_HandleTypeDef hdma_spi2_tx;
-
-SD_HandleTypeDef hsd;
-
-TIM_HandleTypeDef htim12;
-
-UART_HandleTypeDef huart1;
-UART_HandleTypeDef huart3;
-DMA_HandleTypeDef hdma_usart3_rx;
-
-SRAM_HandleTypeDef hsram1;
-SRAM_HandleTypeDef hsram2;
 
 /* USER CODE BEGIN PV */
 FATFS gFatFs;
@@ -108,6 +104,9 @@ uint8_t mw8266RxDmaBuf[MW8266_RX_DMA_BUF_SIZE];
 ImageUploadContext_t uploadCtx;
 
 static uint32_t gLastPhotoScanTick = 0;
+static volatile uint8_t gLd3320IrqPending = 0U;
+static uint8_t gLd3320LastResult = 0U;
+static uint8_t gLd3320CmdFlag = 0U;
 
 ES8388_HandleTypeDef hEs8388;
 ES8388_ProbeResultTypeDef es8388Probe;
@@ -137,23 +136,14 @@ static WavPlaybackContext_t gWavPlayback;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
-static void MX_SDIO_SD_Init(void);
-static void MX_USART1_UART_Init(void);
-static void MX_TIM12_Init(void);
-static void MX_FSMC_Init(void);
-static void MX_USART3_UART_Init(void);
-static void MX_I2S2_Init(void);
-static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 static void FormatSdCard(void);
 static void CreateTestFile(void);
 static void I2C1_BusRecovery(void);
 static void AudioTestTone_InitBuffer(void);
 static HAL_StatusTypeDef AudioTestTone_Start(void);
-static uint8_t ES8388_IsPlaybackConfigActive(
-    const ES8388_ProbeResultTypeDef *probe);
+static uint8_t
+ES8388_IsPlaybackConfigActive(const ES8388_ProbeResultTypeDef *probe);
 static HAL_StatusTypeDef AudioPlayback_StartWav(const char *path);
 static void AudioPlayback_Task(void);
 static void AudioPlayback_Stop(void);
@@ -230,11 +220,11 @@ static int ParseImageHeader(const char *payload, uint32_t *fileSize,
 
 static void AudioTestTone_InitBuffer(void) {
   static const int16_t kMonoWave[AUDIO_TEST_TONE_FRAMES] = {
-      2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500,
-      2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500,
+      2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,
+      2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,  2500,
+      2500,  2500,  2500,  2500,  -2500, -2500, -2500, -2500, -2500, -2500,
       -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500,
-      -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500,
-      -2500, -2500, -2500, -2500};
+      -2500, -2500, -2500, -2500, -2500, -2500, -2500, -2500};
 
   for (uint32_t i = 0; i < AUDIO_TEST_TONE_FRAMES; i++) {
     gAudioTestTone[i * 2U] = kMonoWave[i];
@@ -248,8 +238,8 @@ static HAL_StatusTypeDef AudioTestTone_Start(void) {
                               AUDIO_TEST_TONE_WORDS);
 }
 
-static uint8_t ES8388_IsPlaybackConfigActive(
-    const ES8388_ProbeResultTypeDef *probe) {
+static uint8_t
+ES8388_IsPlaybackConfigActive(const ES8388_ProbeResultTypeDef *probe) {
   if (probe == NULL) {
     return 0U;
   }
@@ -576,8 +566,7 @@ static int AudioTrack_IsWavFile(const char *fileName) {
     return 0;
   }
 
-  return ((ext[0] == '.') &&
-          ((ext[1] == 'w') || (ext[1] == 'W')) &&
+  return ((ext[0] == '.') && ((ext[1] == 'w') || (ext[1] == 'W')) &&
           ((ext[2] == 'a') || (ext[2] == 'A')) &&
           ((ext[3] == 'v') || (ext[3] == 'V')) && (ext[4] == '\0'));
 }
@@ -690,11 +679,14 @@ void AudioPlayer_ScanTracks(void) {
 
 uint32_t AudioPlayer_GetTrackCount(void) { return gAudioTrackCount; }
 
-int32_t AudioPlayer_GetCurrentTrackIndex(void) { return gCurrentAudioTrackIndex; }
+int32_t AudioPlayer_GetCurrentTrackIndex(void) {
+  return gCurrentAudioTrackIndex;
+}
 
 uint8_t AudioPlayer_IsPlaying(void) { return gWavPlayback.isPlaying; }
 
-int AudioPlayer_GetTrackName(uint32_t index, char *buffer, uint32_t bufferSize) {
+int AudioPlayer_GetTrackName(uint32_t index, char *buffer,
+                             uint32_t bufferSize) {
   if (buffer == NULL || bufferSize == 0U) {
     return -1;
   }
@@ -821,6 +813,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_I2S2_Init();
   MX_I2C1_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   // HAL_Delay(1000);
   // FormatSdCard();
@@ -848,6 +841,39 @@ int main(void)
     printf("f_mount failed: %d\r\n", res);
   }
 
+  LD3320_Reset();
+
+  uint8_t value = LD3320_ReadReg(0x06);
+  printf("Reg 0x06 = 0x%02X\r\n", value);
+
+  value = LD3320_ReadReg(0xB2);
+  printf("Reg 0xB2 = 0x%02X\r\n", value);
+
+  LD3320_InitCommon();
+  value = LD3320_ReadReg(0xB2);
+  printf("LD3320 after InitCommon, Reg 0xB2 = 0x%02X\r\n", value);
+
+  LD3320_InitAsr();
+  value = LD3320_ReadReg(0xB2);
+  printf("LD3320 after InitAsr, Reg 0xB2 = 0x%02X\r\n", value);
+
+  if (LD3320_CheckAsrBusyFlagB2() != 0U) {
+    printf("LD3320 ASR busy flag ready (0xB2 == 0x21)\r\n");
+  } else {
+    printf("LD3320 ASR busy flag not ready\r\n");
+  }
+
+  gLd3320AsrStatus = LD_ASR_NONE;
+  gLd3320CmdFlag = 0U;
+  if (LD3320_RunAsr() != 0U) {
+    gLd3320IrqPending = 0U;
+    gLd3320AsrStatus = LD_ASR_RUNING;
+    printf("LD3320 ASR keyword engine started\r\n");
+  } else {
+    gLd3320AsrStatus = LD_ASR_ERROR;
+    printf("LD3320 ASR keyword engine start failed\r\n");
+  }
+
   uint8_t es8388Address = 0;
   if (ES8388_Detect(&hEs8388, &hi2c1, &es8388Address) == HAL_OK) {
     printf("ES8388 detected at 7-bit address: 0x%02X\r\n", es8388Address);
@@ -872,13 +898,14 @@ int main(void)
       if (ES8388_IsPlaybackConfigActive(&es8388Probe)) {
         printf("ES8388 playback config already active, skip re-init\r\n");
 
+#if LD3320_VOICE_TEST_ONLY
+        printf("Audio playback disabled for LD3320 voice-only test\r\n");
+#else
         if (AudioOutput_Apply(&hEs8388) != HAL_OK) {
-          printf(
-              "ES8388 %s path setup failed, reg=0x%02X value=0x%02X "
-              "halError=0x%08lX\r\n",
-              AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
-              ES8388_GetLastValue(&hEs8388),
-              ES8388_GetLastError(&hEs8388));
+          printf("ES8388 %s path setup failed, reg=0x%02X value=0x%02X "
+                 "halError=0x%08lX\r\n",
+                 AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
+                 ES8388_GetLastValue(&hEs8388), ES8388_GetLastError(&hEs8388));
         }
 
         if (AudioPlayer_PlayCurrent() == HAL_OK) {
@@ -890,8 +917,13 @@ int main(void)
                  (unsigned long)HAL_I2S_GetError(&hi2s2),
                  (unsigned long)hdma_spi2_tx.ErrorCode);
         }
+#endif
       } else {
         if (ES8388_InitForPlaybackHeadphone(&hEs8388) == HAL_OK) {
+#if LD3320_VOICE_TEST_ONLY
+          printf("ES8388 %s playback init OK\r\n", AudioOutput_Name());
+          printf("Audio playback disabled for LD3320 voice-only test\r\n");
+#else
           if (AudioOutput_Apply(&hEs8388) == HAL_OK) {
             printf("ES8388 %s playback init OK\r\n", AudioOutput_Name());
 
@@ -906,13 +938,13 @@ int main(void)
                   (unsigned long)hdma_spi2_tx.ErrorCode);
             }
           } else {
-            printf(
-                "ES8388 post-init %s path setup failed, reg=0x%02X "
-                "value=0x%02X halError=0x%08lX\r\n",
-                AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
-                ES8388_GetLastValue(&hEs8388),
-                ES8388_GetLastError(&hEs8388));
+            printf("ES8388 post-init %s path setup failed, reg=0x%02X "
+                   "value=0x%02X halError=0x%08lX\r\n",
+                   AudioOutput_Name(), ES8388_GetLastReg(&hEs8388),
+                   ES8388_GetLastValue(&hEs8388),
+                   ES8388_GetLastError(&hEs8388));
           }
+#endif
         } else {
           printf(
               "ES8388 headphone playback init failed, reg=0x%02X value=0x%02X "
@@ -1018,6 +1050,63 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    {
+      if (gLd3320IrqPending != 0U) {
+        gLd3320IrqPending = 0U;
+        printf("LD3320 IRQ\r\n");
+        LD3320_ProcessInt();
+        printf("LD3320 ASR status: 0x%02X\r\n", gLd3320AsrStatus);
+      }
+
+      switch (gLd3320AsrStatus) {
+      case LD_ASR_RUNING:
+      case LD_ASR_ERROR:
+        break;
+
+      case LD_ASR_NONE:
+        gLd3320AsrStatus = LD_ASR_RUNING;
+        if (LD3320_RunAsr() == 0U) {
+          gLd3320AsrStatus = LD_ASR_ERROR;
+          printf("LD3320 ASR keyword engine start failed\r\n");
+        } else {
+          printf("LD3320 ASR running\r\n");
+        }
+        break;
+
+      case LD_ASR_FOUNDOK:
+        gLd3320LastResult = LD3320_GetResult();
+        if (gLd3320LastResult == LD3320_CODE_CMD) {
+          gLd3320CmdFlag = 1U;
+          printf("LD3320 level-1 command detected\r\n");
+        } else if (gLd3320CmdFlag != 0U) {
+          gLd3320CmdFlag = 0U;
+          switch (gLd3320LastResult) {
+          case LD3320_CODE_1KL1:
+            printf("LD3320 recognized: bei jing\r\n");
+            break;
+          case LD3320_CODE_1KL2:
+            printf("LD3320 recognized: shang hai\r\n");
+            break;
+          default:
+            printf("LD3320 result code: 0x%02X\r\n", gLd3320LastResult);
+            break;
+          }
+        } else {
+          printf("LD3320: please say level-1 command first\r\n");
+        }
+        gLd3320AsrStatus = LD_ASR_NONE;
+        break;
+
+      case LD_ASR_FOUNDZERO:
+        printf("LD3320 no result\r\n");
+        gLd3320AsrStatus = LD_ASR_NONE;
+        break;
+      default:
+        gLd3320AsrStatus = LD_ASR_NONE;
+        break;
+      }
+    }
+
     // PhotoScanTask();
 
     if (mw8266.rxFrameReady) {
@@ -1172,405 +1261,6 @@ void SystemClock_Config(void)
   }
 }
 
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C1_Init 2 */
-
-  /* USER CODE END I2C1_Init 2 */
-
-}
-
-/**
-  * @brief I2S2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2S2_Init(void)
-{
-
-  /* USER CODE BEGIN I2S2_Init 0 */
-
-  /* USER CODE END I2S2_Init 0 */
-
-  /* USER CODE BEGIN I2S2_Init 1 */
-
-  /* USER CODE END I2S2_Init 1 */
-  hi2s2.Instance = SPI2;
-  hi2s2.Init.Mode = I2S_MODE_MASTER_TX;
-  hi2s2.Init.Standard = I2S_STANDARD_PHILIPS;
-  hi2s2.Init.DataFormat = I2S_DATAFORMAT_16B;
-  hi2s2.Init.MCLKOutput = I2S_MCLKOUTPUT_ENABLE;
-  hi2s2.Init.AudioFreq = I2S_AUDIOFREQ_48K;
-  hi2s2.Init.CPOL = I2S_CPOL_LOW;
-  hi2s2.Init.ClockSource = I2S_CLOCK_PLL;
-  hi2s2.Init.FullDuplexMode = I2S_FULLDUPLEXMODE_DISABLE;
-  if (HAL_I2S_Init(&hi2s2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2S2_Init 2 */
-
-  /* USER CODE END I2S2_Init 2 */
-
-}
-
-/**
-  * @brief SDIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SDIO_SD_Init(void)
-{
-
-  /* USER CODE BEGIN SDIO_Init 0 */
-
-  /* USER CODE END SDIO_Init 0 */
-
-  /* USER CODE BEGIN SDIO_Init 1 */
-
-  /* USER CODE END SDIO_Init 1 */
-  hsd.Instance = SDIO;
-  hsd.Init.ClockEdge = SDIO_CLOCK_EDGE_RISING;
-  hsd.Init.ClockBypass = SDIO_CLOCK_BYPASS_DISABLE;
-  hsd.Init.ClockPowerSave = SDIO_CLOCK_POWER_SAVE_DISABLE;
-  hsd.Init.BusWide = SDIO_BUS_WIDE_1B;
-  hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_ENABLE;
-  hsd.Init.ClockDiv = 2;
-  /* USER CODE BEGIN SDIO_Init 2 */
-
-  /* USER CODE END SDIO_Init 2 */
-
-}
-
-/**
-  * @brief TIM12 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM12_Init(void)
-{
-
-  /* USER CODE BEGIN TIM12_Init 0 */
-
-  /* USER CODE END TIM12_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM12_Init 1 */
-
-  /* USER CODE END TIM12_Init 1 */
-  htim12.Instance = TIM12;
-  htim12.Init.Prescaler = 83;
-  htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim12.Init.Period = 99;
-  htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  if (HAL_TIM_Base_Init(&htim12) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim12, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 100;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim12, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM12_Init 2 */
-
-  /* USER CODE END TIM12_Init 2 */
-  HAL_TIM_MspPostInit(&htim12);
-
-}
-
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
-
-/**
-  * @brief USART3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART3_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART3_Init 0 */
-
-  /* USER CODE END USART3_Init 0 */
-
-  /* USER CODE BEGIN USART3_Init 1 */
-
-  /* USER CODE END USART3_Init 1 */
-  huart3.Instance = USART3;
-  huart3.Init.BaudRate = 115200;
-  huart3.Init.WordLength = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits = UART_STOPBITS_1;
-  huart3.Init.Parity = UART_PARITY_NONE;
-  huart3.Init.Mode = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART3_Init 2 */
-
-  /* USER CODE END USART3_Init 2 */
-
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Stream1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
-  /* DMA1_Stream4_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
-
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
-
-  /* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
-  __HAL_RCC_GPIOE_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GT911_RST_GPIO_Port, GT911_RST_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOF, LED0_Pin|GT911_SDA_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GT911_SCL_Pin|GT911_INT_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : GT911_RST_Pin */
-  GPIO_InitStruct.Pin = GT911_RST_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GT911_RST_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : LED0_Pin */
-  GPIO_InitStruct.Pin = LED0_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED0_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : GT911_SCL_Pin */
-  GPIO_InitStruct.Pin = GT911_SCL_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GT911_SCL_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : GT911_INT_Pin */
-  GPIO_InitStruct.Pin = GT911_INT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GT911_INT_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : GT911_SDA_Pin */
-  GPIO_InitStruct.Pin = GT911_SDA_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GT911_SDA_GPIO_Port, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-
-  /* USER CODE END MX_GPIO_Init_2 */
-}
-
-/* FSMC initialization function */
-static void MX_FSMC_Init(void)
-{
-
-  /* USER CODE BEGIN FSMC_Init 0 */
-
-  /* USER CODE END FSMC_Init 0 */
-
-  FSMC_NORSRAM_TimingTypeDef Timing = {0};
-  FSMC_NORSRAM_TimingTypeDef ExtTiming = {0};
-
-  /* USER CODE BEGIN FSMC_Init 1 */
-
-  /* USER CODE END FSMC_Init 1 */
-
-  /** Perform the SRAM1 memory initialization sequence
-  */
-  hsram1.Instance = FSMC_NORSRAM_DEVICE;
-  hsram1.Extended = FSMC_NORSRAM_EXTENDED_DEVICE;
-  /* hsram1.Init */
-  hsram1.Init.NSBank = FSMC_NORSRAM_BANK4;
-  hsram1.Init.DataAddressMux = FSMC_DATA_ADDRESS_MUX_DISABLE;
-  hsram1.Init.MemoryType = FSMC_MEMORY_TYPE_SRAM;
-  hsram1.Init.MemoryDataWidth = FSMC_NORSRAM_MEM_BUS_WIDTH_16;
-  hsram1.Init.BurstAccessMode = FSMC_BURST_ACCESS_MODE_DISABLE;
-  hsram1.Init.WaitSignalPolarity = FSMC_WAIT_SIGNAL_POLARITY_LOW;
-  hsram1.Init.WrapMode = FSMC_WRAP_MODE_DISABLE;
-  hsram1.Init.WaitSignalActive = FSMC_WAIT_TIMING_BEFORE_WS;
-  hsram1.Init.WriteOperation = FSMC_WRITE_OPERATION_ENABLE;
-  hsram1.Init.WaitSignal = FSMC_WAIT_SIGNAL_DISABLE;
-  hsram1.Init.ExtendedMode = FSMC_EXTENDED_MODE_ENABLE;
-  hsram1.Init.AsynchronousWait = FSMC_ASYNCHRONOUS_WAIT_DISABLE;
-  hsram1.Init.WriteBurst = FSMC_WRITE_BURST_DISABLE;
-  hsram1.Init.PageSize = FSMC_PAGE_SIZE_NONE;
-  /* Timing */
-  Timing.AddressSetupTime = 15;
-  Timing.AddressHoldTime = 15;
-  Timing.DataSetupTime = 60;
-  Timing.BusTurnAroundDuration = 0;
-  Timing.CLKDivision = 16;
-  Timing.DataLatency = 17;
-  Timing.AccessMode = FSMC_ACCESS_MODE_A;
-  /* ExtTiming */
-  ExtTiming.AddressSetupTime = 9;
-  ExtTiming.AddressHoldTime = 15;
-  ExtTiming.DataSetupTime = 9;
-  ExtTiming.BusTurnAroundDuration = 0;
-  ExtTiming.CLKDivision = 16;
-  ExtTiming.DataLatency = 17;
-  ExtTiming.AccessMode = FSMC_ACCESS_MODE_A;
-
-  if (HAL_SRAM_Init(&hsram1, &Timing, &ExtTiming) != HAL_OK)
-  {
-    Error_Handler( );
-  }
-
-  /** Perform the SRAM2 memory initialization sequence
-  */
-  hsram2.Instance = FSMC_NORSRAM_DEVICE;
-  hsram2.Extended = FSMC_NORSRAM_EXTENDED_DEVICE;
-  /* hsram2.Init */
-  hsram2.Init.NSBank = FSMC_NORSRAM_BANK3;
-  hsram2.Init.DataAddressMux = FSMC_DATA_ADDRESS_MUX_DISABLE;
-  hsram2.Init.MemoryType = FSMC_MEMORY_TYPE_SRAM;
-  hsram2.Init.MemoryDataWidth = FSMC_NORSRAM_MEM_BUS_WIDTH_16;
-  hsram2.Init.BurstAccessMode = FSMC_BURST_ACCESS_MODE_DISABLE;
-  hsram2.Init.WaitSignalPolarity = FSMC_WAIT_SIGNAL_POLARITY_LOW;
-  hsram2.Init.WrapMode = FSMC_WRAP_MODE_DISABLE;
-  hsram2.Init.WaitSignalActive = FSMC_WAIT_TIMING_BEFORE_WS;
-  hsram2.Init.WriteOperation = FSMC_WRITE_OPERATION_ENABLE;
-  hsram2.Init.WaitSignal = FSMC_WAIT_SIGNAL_DISABLE;
-  hsram2.Init.ExtendedMode = FSMC_EXTENDED_MODE_DISABLE;
-  hsram2.Init.AsynchronousWait = FSMC_ASYNCHRONOUS_WAIT_DISABLE;
-  hsram2.Init.WriteBurst = FSMC_WRITE_BURST_DISABLE;
-  hsram2.Init.PageSize = FSMC_PAGE_SIZE_NONE;
-  /* Timing */
-  Timing.AddressSetupTime = 2;
-  Timing.AddressHoldTime = 15;
-  Timing.DataSetupTime = 6;
-  Timing.BusTurnAroundDuration = 1;
-  Timing.CLKDivision = 16;
-  Timing.DataLatency = 17;
-  Timing.AccessMode = FSMC_ACCESS_MODE_A;
-  /* ExtTiming */
-
-  if (HAL_SRAM_Init(&hsram2, &Timing, NULL) != HAL_OK)
-  {
-    Error_Handler( );
-  }
-
-  /* USER CODE BEGIN FSMC_Init 2 */
-
-  /* USER CODE END FSMC_Init 2 */
-}
-
 /* USER CODE BEGIN 4 */
 static void I2C1_BusRecovery(void) {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -1691,6 +1381,12 @@ void HAL_I2S_TxHalfCpltCallback(I2S_HandleTypeDef *hi2s) {
 void HAL_I2S_TxCpltCallback(I2S_HandleTypeDef *hi2s) {
   if (hi2s == &hi2s2 && gWavPlayback.isPlaying != 0U) {
     gWavPlayback.pendingHalf1 = 1U;
+  }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+  if (GPIO_Pin == LD3320_IRQ_Pin) {
+    gLd3320IrqPending = 1U;
   }
 }
 /* USER CODE END 4 */
